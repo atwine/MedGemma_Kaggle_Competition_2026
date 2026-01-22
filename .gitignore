@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.streamlit/
+.DS_Store
+
+# Local vector DB (Chroma persistence)
+/storage/chroma/

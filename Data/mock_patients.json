@@ -1,0 +1,156 @@
+[
+  {
+    "patient_id": "P001",
+    "name": "John Doe",
+    "sex": "M",
+    "age_years": 34,
+    "art_regimen_current": ["TDF", "3TC", "DTG"],
+    "regimen_history": [
+      {
+        "start_date": "2023-01-10",
+        "end_date": null,
+        "regimen": ["TDF", "3TC", "DTG"]
+      }
+    ],
+    "visits": [
+      {
+        "date": "2026-01-22",
+        "type": "routine",
+        "clinician_note": "Feels well. No new complaints. Adherence reported good."
+      }
+    ],
+    "labs": {
+      "viral_load": [
+        { "date": "2025-10-01", "value_copies_per_ml": 40 }
+      ],
+      "creatinine": [
+        { "date": "2024-10-01", "value_umol_per_l": 88 }
+      ]
+    },
+    "today_encounter": {
+      "date": "2026-01-22",
+      "note": "Routine follow-up. No issues.",
+      "orders": [],
+      "med_changes": []
+    },
+    "expected_demo_outcome": {
+      "status": "YELLOW",
+      "notes": "TDF monitoring example: creatinine is intentionally outdated for demo."
+    }
+  },
+  {
+    "patient_id": "P002",
+    "name": "Jane Roe",
+    "sex": "F",
+    "age_years": 29,
+    "art_regimen_current": ["TDF", "3TC", "DTG"],
+    "regimen_history": [
+      {
+        "start_date": "2022-06-14",
+        "end_date": null,
+        "regimen": ["TDF", "3TC", "DTG"]
+      }
+    ],
+    "visits": [
+      {
+        "date": "2025-12-15",
+        "type": "routine",
+        "clinician_note": "Stable on ART."
+      }
+    ],
+    "labs": {
+      "viral_load": [
+        { "date": "2025-09-15", "value_copies_per_ml": 20 },
+        { "date": "2024-09-15", "value_copies_per_ml": 30 }
+      ],
+      "creatinine": [
+        { "date": "2025-12-15", "value_umol_per_l": 76 }
+      ]
+    },
+    "today_encounter": {
+      "date": "2026-01-22",
+      "note": "Routine follow-up. Stable. Discussed DSD eligibility.",
+      "orders": [],
+      "med_changes": []
+    },
+    "expected_demo_outcome": {
+      "status": "GREEN",
+      "notes": "Stable patient, no alerts expected in baseline demo."
+    }
+  },
+  {
+    "patient_id": "P003",
+    "name": "Sam Kato",
+    "sex": "M",
+    "age_years": 41,
+    "art_regimen_current": ["TDF", "3TC", "EFV"],
+    "regimen_history": [
+      {
+        "start_date": "2024-02-01",
+        "end_date": null,
+        "regimen": ["TDF", "3TC", "EFV"]
+      }
+    ],
+    "visits": [
+      {
+        "date": "2026-01-22",
+        "type": "routine",
+        "clinician_note": "Reports poor sleep and vivid dreams for several weeks."
+      }
+    ],
+    "labs": {
+      "viral_load": [
+        { "date": "2025-08-10", "value_copies_per_ml": 60 }
+      ]
+    },
+    "today_encounter": {
+      "date": "2026-01-22",
+      "note": "Complains of insomnia; has vivid dreams. No suicidal ideation.",
+      "orders": [],
+      "med_changes": []
+    },
+    "expected_demo_outcome": {
+      "status": "YELLOW",
+      "notes": "EFV toxicity signal example: sleep disturbance mentions."
+    }
+  },
+  {
+    "patient_id": "P004",
+    "name": "Amina Nansubuga",
+    "sex": "F",
+    "age_years": 37,
+    "art_regimen_current": ["TDF", "3TC", "DTG"],
+    "regimen_history": [
+      {
+        "start_date": "2023-03-20",
+        "end_date": null,
+        "regimen": ["TDF", "3TC", "DTG"]
+      }
+    ],
+    "visits": [
+      {
+        "date": "2026-01-22",
+        "type": "routine",
+        "clinician_note": "Mixed-language note: 'Omusawo, mpulira obulumi mu lubuto, but no fever.'"
+      }
+    ],
+    "labs": {
+      "viral_load": [
+        { "date": "2025-11-05", "value_copies_per_ml": 25 }
+      ],
+      "creatinine": [
+        { "date": "2025-11-05", "value_umol_per_l": 82 }
+      ]
+    },
+    "today_encounter": {
+      "date": "2026-01-22",
+      "note": "Omusawo, mpulira obulumi mu lubuto, but appetite is okay.",
+      "orders": [],
+      "med_changes": []
+    },
+    "expected_demo_outcome": {
+      "status": "GREEN",
+      "notes": "Multilingual processing demo: entity extraction/translation later; baseline alerts may be none."
+    }
+  }
+]
