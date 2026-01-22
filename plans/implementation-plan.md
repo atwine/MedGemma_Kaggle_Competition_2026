@@ -171,7 +171,35 @@ MegGemma Kaggle Project 2026/
       - [ ] whether guideline citations were relevant
       - [ ] whether the workflow is usable (time, clarity)
 
-  - [ ] **11.6 Deployment approach (pilot)**
+  - [ ] **11.6 MedGemma innovation layer (optional, but recommended for the challenge)**
+    - **Goal:** Use MedGemma in a clearly valuable way while keeping alert triggering reproducible and testable.
+    - **Why this is needed:** The deterministic rules provide stability for testing, while MedGemma can add medical understanding, better guidance, and faster expansion of rule coverage.
+
+    - [ ] **11.6.1 Note → structured clinical signals (supports real-world notes)**
+      - [ ] Use MedGemma to extract key signals from free-text notes (e.g., symptoms, side effects, adherence concerns).
+      - [ ] Display extracted signals to the user for transparency.
+      - [ ] Feed extracted signals into deterministic rules (rules decide the trigger; model helps interpret text).
+      - [ ] Rationale: real patient scenarios often include key details only in notes; this improves usefulness without losing reproducibility.
+
+    - [ ] **11.6.2 Guideline-grounded guidance (questions, urgency, plausible reasons)**
+      - [ ] For each triggered alert, use MedGemma to generate:
+        - [ ] plausible reasons / differential considerations
+        - [ ] what to ask next (targeted questions)
+        - [ ] urgency / suggested timeframe (when appropriate)
+      - [ ] Require that each suggestion is grounded in retrieved guideline excerpts (quoted + cited).
+      - [ ] Rationale: increases clinical value beyond “an alert exists”, while staying evidence-based.
+
+    - [ ] **11.6.3 Model-proposed new rules with clinician approval (rule growth over time)**
+      - [ ] Add a workflow where, when a new scenario arises, MedGemma can propose a candidate rule:
+        - [ ] proposed rule name + trigger criteria
+        - [ ] patient data fields required
+        - [ ] linked guideline excerpt(s) supporting it
+        - [ ] suggested test cases (positive/negative examples)
+      - [ ] Require human approval before the rule becomes active for future patients.
+      - [ ] Store approved rules in a versioned format (e.g., JSON/YAML) so changes are reviewable.
+      - [ ] Rationale: enables rapid expansion of coverage while preserving safety and auditability.
+
+  - [ ] **11.7 Deployment approach (pilot)**
     - [ ] Document 2 supported ways to run:
       - [ ] Local laptop mode (simplest)
       - [ ] Small on-prem server mode (shared within a clinic network)
