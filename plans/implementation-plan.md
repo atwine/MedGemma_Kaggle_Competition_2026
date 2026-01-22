@@ -51,36 +51,36 @@ MegGemma Kaggle Project 2026/
 
 ## 3. Implementation Steps
 
-- [ ] **Task 1: Project bootstrap (minimal runnable skeleton)**
-  - [ ] Create `app.py`, `modules/`, `tests/`, `storage/`.
-  - [ ] Create `requirements.txt` with pinned core deps for a local demo.
-  - [ ] Add a `README.md` that documents:
+- [x] **Task 1: Project bootstrap (minimal runnable skeleton)**
+  - [x] Create `app.py`, `modules/`, `tests/`, `storage/`.
+  - [x] Create `requirements.txt` with pinned core deps for a local demo.
+  - [x] Add a `README.md` that documents:
     - how to set up venv
     - how to install deps
     - how to run Streamlit
     - how to run tests
 
-- [ ] **Task 2: Guideline ingestion + chunking**
-  - [ ] Implement `modules/guideline_processor.py`:
-    - [ ] Extract text from `Data/Uganda Clinical Guidelines 2023.pdf`.
-    - [ ] Chunk into semantic-ish blocks (start with simple paragraph/heading heuristics).
-    - [ ] Attach metadata per chunk (source filename, page number if available, chunk_id).
-  - [ ] Create a small smoke test that returns a non-empty set of chunks.
+- [x] **Task 2: Guideline ingestion + chunking**
+  - [x] Implement `modules/guideline_processor.py`:
+    - [x] Extract text from `Data/Uganda Clinical Guidelines 2023.pdf`.
+    - [x] Chunk into semantic-ish blocks (start with simple paragraph/heading heuristics).
+    - [x] Attach metadata per chunk (source filename, page number if available, chunk_id).
+  - [x] Create a small smoke test that returns a non-empty set of chunks.
 
 - [ ] **Task 3: Embeddings + vector store (local)**
-  - [ ] Implement `modules/embedder.py` using `sentence-transformers`.
-  - [ ] Implement `modules/vector_store.py`:
-    - [ ] Local persistent Chroma collection for guideline chunks.
+  - [x] Implement `modules/embedder.py` using `sentence-transformers`.
+  - [x] Implement `modules/vector_store.py`:
+    - [x] Local persistent Chroma collection for guideline chunks.
     - [ ] Support rebuild/index command (e.g., a checkbox/button in Streamlit or a CLI function).
-    - [ ] Fallback: in-memory cosine similarity if Chroma is unavailable.
+    - [x] Fallback: in-memory cosine similarity if Chroma is unavailable.
 
-- [ ] **Task 4: Patient data model + mock patients**
-  - [ ] Define the patient JSON schema in `Data/mock_patients.json`:
+- [x] **Task 4: Patient data model + mock patients**
+  - [x] Define the patient JSON schema in `Data/mock_patients.json`:
     - longitudinal visits
     - meds/regimen history
     - labs with dates
     - free-text notes (include one mixed-language example)
-  - [ ] Implement `modules/patient_parser.py` to normalize:
+  - [x] Implement `modules/patient_parser.py` to normalize:
     - “today’s encounter” + “history” into a single context object
 
 - [ ] **Task 5: Deterministic alert rules (Green/Yellow)**
@@ -88,42 +88,94 @@ MegGemma Kaggle Project 2026/
     - overdue monitoring example (e.g., creatinine overdue while on TDF)
     - toxicity symptom signal example (e.g., EFV + sleep disturbance mentions)
     - DSD eligibility example (stable patient based on VL suppression window)
-  - [ ] Each rule must produce an alert object with:
+  - [x] Each rule must produce an alert object with:
     - id, title, rationale
     - patient evidence payload
     - retrieval query hints (for guideline lookup)
 
-- [ ] **Task 6: RAG retrieval + guideline traceability**
-  - [ ] Implement `modules/rag_engine.py`:
-    - [ ] Build queries based on patient context + alert rule hints.
-    - [ ] Retrieve top_k guideline chunks.
-    - [ ] Return chunks with similarity scores + metadata.
+- [x] **Task 6: RAG retrieval + guideline traceability**
+  - [x] Implement `modules/rag_engine.py`:
+    - [x] Build queries based on patient context + alert rule hints.
+    - [x] Retrieve top_k guideline chunks.
+    - [x] Return chunks with similarity scores + metadata.
 
-- [ ] **Task 7: Local LLM integration (Ollama MedGemma)**
-  - [ ] Implement `modules/llm_client.py` calling the local Ollama chat API.
-  - [ ] Configure model name (e.g., `MedAIBase/MedGemma1.5:4b`) via env var or Streamlit settings.
-  - [ ] Implement `modules/explanation_generator.py`:
-    - [ ] Generate clinician-friendly “Why this alert?” text.
-    - [ ] Require inclusion of a quoted guideline excerpt in the answer.
+- [x] **Task 7: Local LLM integration (Ollama MedGemma)**
+  - [x] Implement `modules/llm_client.py` calling the local Ollama chat API.
+  - [x] Configure model name (e.g., `MedAIBase/MedGemma1.5:4b`) via env var or Streamlit settings.
+  - [x] Implement `modules/explanation_generator.py`:
+    - [x] Generate clinician-friendly “Why this alert?” text.
+    - [x] Require inclusion of a quoted guideline excerpt in the answer.
 
-- [ ] **Task 8: Streamlit UI (Save vs Finalize workflow)**
-  - [ ] Build `app.py` screens:
-    - [ ] Patient selector
-    - [ ] “Today’s encounter” form (structured fields + free-text note)
-    - [ ] Save button: runs analysis and displays Green/Yellow summary + alert list
-    - [ ] Alert panel: expandable evidence + retrieved guideline chunks
-    - [ ] Acknowledge/Override controls per alert
-    - [ ] Finalize button: disabled until all alerts are acknowledged/overridden
-    - [ ] Disclaimer banner
+- [x] **Task 8: Streamlit UI (Save vs Finalize workflow)**
+  - [x] Build `app.py` screens:
+    - [x] Patient selector
+    - [x] “Today’s encounter” form (structured fields + free-text note)
+    - [x] Save button: runs analysis and displays Green/Yellow summary + alert list
+    - [x] Alert panel: expandable evidence + retrieved guideline chunks
+    - [x] Acknowledge/Override controls per alert
+    - [x] Finalize button: disabled until all alerts are acknowledged/overridden
+    - [x] Disclaimer banner
 
-- [ ] **Task 9: Tests + minimal validation**
-  - [ ] Unit tests for rule triggers (deterministic).
-  - [ ] Unit test: guideline chunking returns non-empty chunks.
-  - [ ] Unit test: vector retrieval returns top_k chunks.
+- [x] **Task 9: Tests + minimal validation**
+  - [x] Unit tests for rule triggers (deterministic).
+  - [x] Unit test: guideline chunking returns non-empty chunks.
+  - [x] Unit test: vector retrieval returns top_k chunks.
 
 - [ ] **Task 10: Demo readiness**
   - [ ] Add a “Demo mode” toggle that loads prebuilt mock patients.
   - [ ] Add a “Show pipeline” panel (Parse → Retrieve → Generate) to explain RAG.
+
+- [ ] **Task 11: Pilot / live-readiness (real data testing)**
+  - **Goal:** Allow colleagues to test the app using realistic patient scenarios (real or de-identified) while protecting privacy and maintaining safety.
+  - **Why this is needed:**
+    - Demo JSON is useful for development, but a pilot needs a supported way to bring in real patient data and to record what was reviewed/overridden.
+    - Clinical use requires access control and an audit trail.
+
+  - [ ] **11.1 Real patient data ingestion (replace demo JSON only at the boundary)**
+    - [ ] Add a new patient data source option in the UI:
+      - [ ] **Option A (recommended first):** upload/import a file (JSON/CSV) for testing.
+      - [ ] **Option B (later):** connect to a live system (e.g., EMR) via an API.
+    - [ ] Define and document a “live patient” input schema (minimal fields required by rules):
+      - [ ] patient identifier (or test ID), encounter date, current regimen
+      - [ ] labs: viral load (date/value), creatinine (date/value) where relevant
+      - [ ] notes text (previous notes + today note)
+    - [ ] Add validation with clear user-facing errors when required fields are missing.
+    - [ ] Add a “safe demo mode” option that forces synthetic/de-identified data only.
+
+  - [ ] **11.2 Privacy + access control**
+    - [ ] Add basic authentication (password-protected access) for pilot sites.
+    - [ ] Add a prominent reminder banner when real patient data is being used.
+    - [ ] Document operational guidance:
+      - [ ] run on a clinic laptop or internal network
+      - [ ] do not expose Streamlit publicly
+
+  - [ ] **11.3 Audit trail (who reviewed what, and why)**
+    - [ ] Persist an audit record for each analysis run, including:
+      - [ ] timestamp, patient ID (or test ID), which alerts triggered
+      - [ ] per-alert action (Acknowledged/Overridden), override reason, optional comment
+    - [ ] Rationale: pilot evaluation needs traceability and post-hoc review.
+    - [ ] Storage approach (minimal): local SQLite file under `storage/`.
+
+  - [ ] **11.4 Welcome / navigation page (user friendliness)**
+    - [ ] Add a first screen that explains:
+      - [ ] what the tool does and does not do
+      - [ ] how to use Save vs Finalize
+      - [ ] how to interpret GREEN vs YELLOW
+      - [ ] privacy reminder when using real data
+    - [ ] Rationale: reduces onboarding time for new clinical users.
+
+  - [ ] **11.5 Pilot validation and safety checks**
+    - [ ] Create a set of 5–10 “pilot scenarios” (clinical vignettes) and expected outcomes.
+    - [ ] Add a checklist for pilot testers:
+      - [ ] false positives/false negatives noted
+      - [ ] whether guideline citations were relevant
+      - [ ] whether the workflow is usable (time, clarity)
+
+  - [ ] **11.6 Deployment approach (pilot)**
+    - [ ] Document 2 supported ways to run:
+      - [ ] Local laptop mode (simplest)
+      - [ ] Small on-prem server mode (shared within a clinic network)
+    - [ ] Define environment requirements (Python, model availability, guideline PDF path).
 
 ## 4. Acceptance Tests (manual)
 
@@ -136,3 +188,7 @@ MegGemma Kaggle Project 2026/
 
 - Confirm which exact MedGemma Ollama tag you will standardize on (4B vs other) and the target machine specs.
 - Confirm which rules must be in the demo vs later extensions.
+
+- Confirm the pilot testing approach:
+  - File-based import of real/de-identified cases vs direct EMR integration.
+  - Whether the pilot is read-only (“shadow mode”) or must write back notes/actions.
