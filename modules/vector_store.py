@@ -174,12 +174,18 @@ def create_vector_store(
     *,
     project_root: Path,
     prefer_chroma: bool = True,
+    collection_name: str = "uganda_hiv_guidelines",
 ) -> VectorStore:
     """Factory that returns the best available vector store implementation."""
 
     if prefer_chroma:
         try:
-            return ChromaVectorStore(persist_path=project_root / "storage" / "chroma")
+            # Rationale: separate collections per embedding model to avoid mixing
+            # incompatible vector spaces in persistent storage.
+            return ChromaVectorStore(
+                persist_path=project_root / "storage" / "chroma",
+                collection_name=collection_name,
+            )
         except Exception:
             # Rationale: fallback keeps the demo runnable even if Chroma fails to initialize.
             return InMemoryVectorStore()

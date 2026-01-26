@@ -30,13 +30,13 @@ class RagEngine:
         self,
         *,
         project_root: Path,
-        guideline_pdf_path: Path,
+        guideline_pdf_paths: List[Path],
         embedder: Embedder,
         vector_store: VectorStore,
         config: RagConfig | None = None,
     ) -> None:
         self._project_root = project_root
-        self._guideline_pdf_path = guideline_pdf_path
+        self._guideline_pdf_paths = list(guideline_pdf_paths)
         self._embedder = embedder
         self._vector_store = vector_store
         self._config = config or RagConfig()
@@ -54,15 +54,30 @@ class RagEngine:
         if self._indexed:
             return 0
 
-        chunks: List[GuidelineChunk] = process_guidelines(
-            self._guideline_pdf_path,
-            chunk_size=self._config.chunk_size,
-            overlap=self._config.overlap,
-            max_pages=max_pages,
-        )
-        count = self._vector_store.index_guidelines(chunks, self._embedder)
+        total = 0
+        for pdf_path in self._guideline_pdf_paths:
+            chunks: List[GuidelineChunk] = process_guidelines(
+                pdf_path,
+                chunk_size=self._config.chunk_size,
+                overlap=self._config.overlap,
+                max_pages=max_pages,
+            )
+
+            doc_prefix = (
+                pdf_path.stem.strip().lower().replace(" ", "_").replace("+", "_")
+            )
+            prefixed = [
+                GuidelineChunk(
+                    chunk_id=f"{doc_prefix}__{c.chunk_id}",
+                    text=c.text,
+                    source_path=c.source_path,
+                    page_number=c.page_number,
+                )
+                for c in chunks
+            ]
+            total += self._vector_store.index_guidelines(prefixed, self._embedder)
         self._indexed = True
-        return count
+        return total
 
     def retrieve_for_alert(
         self,
