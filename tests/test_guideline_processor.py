@@ -8,11 +8,13 @@ from modules.guideline_processor import process_guidelines
 
 
 def test_process_guidelines_smoke() -> None:
-    pdf_path = (
-        Path(__file__).resolve().parents[1]
-        / "Data"
-        / "Uganda Clinical Guidelines 2023.pdf"
-    )
+    data_dir = Path(__file__).resolve().parents[1] / "Data"
+    consolidated = data_dir / "Consolidated-HIV-and-AIDS-Guidelines-20230516.pdf"
+    legacy = data_dir / "Uganda Clinical Guidelines 2023.pdf"
+
+    # Rationale: prefer the newer consolidated guideline PDF when present, but keep a
+    # fallback to the legacy filename used by the initial demo.
+    pdf_path = consolidated if consolidated.exists() else legacy
 
     if not pdf_path.exists():
         pytest.skip("Local guideline PDF not present")

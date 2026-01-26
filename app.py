@@ -23,7 +23,16 @@ from modules.vector_store import VectorSearchResult, create_vector_store
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-GUIDELINE_PDF_PATH = PROJECT_ROOT / "Data" / "Uganda Clinical Guidelines 2023.pdf"
+CONSOLIDATED_GUIDELINE_PDF_PATH = PROJECT_ROOT / "Data" / "Consolidated-HIV-and-AIDS-Guidelines-20230516.pdf"
+LEGACY_GUIDELINE_PDF_PATH = PROJECT_ROOT / "Data" / "Uganda Clinical Guidelines 2023.pdf"
+
+# Rationale: prefer the newer consolidated guideline PDF when present, but keep a
+# fallback to the legacy filename to avoid breaking existing setups.
+GUIDELINE_PDF_PATH = (
+    CONSOLIDATED_GUIDELINE_PDF_PATH
+    if CONSOLIDATED_GUIDELINE_PDF_PATH.exists()
+    else LEGACY_GUIDELINE_PDF_PATH
+)
 MOCK_PATIENTS_PATH = PROJECT_ROOT / "Data" / "mock_patients.json"
 
 
@@ -63,6 +72,11 @@ def _init_session_state() -> None:
      st.session_state.setdefault("analysis_status", None)
      st.session_state.setdefault("analysis_alerts", [])
      st.session_state.setdefault("analysis_results", [])
+     st.session_state.setdefault("analysis_use_ollama", False)
+     st.session_state.setdefault("analysis_ollama_model", None)
+     st.session_state.setdefault("analysis_ollama_error", None)
+     # Rationale: allow adding ad-hoc test cases without editing JSON files.
+     st.session_state.setdefault("custom_patients", [])
  
  
 def _compute_overall_status(alerts: List[Alert]) -> str:
@@ -129,7 +143,9 @@ def _run_analysis(
          rag.ensure_indexed(max_pages=index_max_pages)
  
      llm_client = OllamaClient() if use_ollama else None
- 
+
+     ollama_error: Optional[str] = None
+
      results: List[Dict[str, Any]] = []
      for alert in alerts:
          retrieved = rag.retrieve_for_alert(patient_context=context, alert=alert, top_k=top_k)
@@ -139,6 +155,14 @@ def _run_analysis(
              retrieved_chunks=retrieved,
              llm_client=llm_client,
          )
+
+         # Rationale: capture the first LLM failure reason so the UI can show why
+         # it fell back to deterministic mode.
+         if llm_client is not None and not explanation.used_llm:
+             last_err = llm_client.last_error
+             if last_err and ollama_error is None:
+                 ollama_error = last_err
+
          results.append(
              {
                  "alert": alert,
@@ -152,6 +176,9 @@ def _run_analysis(
      st.session_state["analysis_alerts"] = alerts
      st.session_state["analysis_results"] = results
      st.session_state["analysis_status"] = _compute_overall_status(alerts)
+     st.session_state["analysis_use_ollama"] = bool(use_ollama)
+     st.session_state["analysis_ollama_model"] = llm_client.model if llm_client is not None else None
+     st.session_state["analysis_ollama_error"] = ollama_error
 
 
 def main() -> None:
@@ -181,16 +208,197 @@ def main() -> None:
      if not patients:
          st.error("No mock patients found in `Data/mock_patients.json`")
          return
+
+     custom_patients = list(st.session_state.get("custom_patients") or [])
+
+     with st.expander("Add patient case", expanded=False):
+         st.warning(
+             "For testing: avoid entering real names/identifiers. Use coded IDs or de-identified data."
+         )
+
+         new_patient_id = st.text_input("Patient ID", key="new_case_patient_id")
+         new_name = st.text_input("Patient display name", key="new_case_name")
+         new_regimen = st.text_input(
+             "Current ART regimen (comma-separated, e.g., TDF, 3TC, EFV)",
+             key="new_case_regimen",
+         )
+         new_encounter_date = st.date_input("Encounter date", key="new_case_encounter_date")
+
+         st.caption("Optional: add one previous clinician note")
+         new_prev_note = st.text_area("Previous clinician note", key="new_case_prev_note", height=80)
+
+         st.caption("Optional: add labs")
+         st.session_state.setdefault("new_case_labs", [])
+
+         lab_key_map = {
+             "Viral load": "viral_load",
+             "CD4 count": "cd4",
+             "Hemoglobin": "hemoglobin",
+             "Serum creatinine": "creatinine",
+             "Serum phosphate": "phosphate",
+             "Urinalysis": "urinalysis",
+             "Random blood sugar": "random_blood_sugar",
+         }
+
+         lab_options = list(lab_key_map.keys()) + ["Other"]
+         lab_col1, lab_col2 = st.columns(2)
+         with lab_col1:
+             selected_lab = st.selectbox("Lab test", lab_options, key="new_case_lab_test")
+             selected_lab_date = st.date_input("Lab date", key="new_case_lab_date")
+         with lab_col2:
+             other_lab_name = ""
+             if selected_lab == "Other":
+                 other_lab_name = st.text_input("Lab name", key="new_case_other_lab_name")
+
+             if selected_lab == "Urinalysis":
+                 selected_lab_value = st.text_area(
+                     "Result",
+                     key="new_case_lab_value_text",
+                     height=80,
+                 )
+             else:
+                 selected_lab_value = st.text_input("Result", key="new_case_lab_value")
+
+         if st.button("Add lab result"):
+             lab_value = (selected_lab_value or "").strip()
+             if not lab_value:
+                 st.error("Lab result is required.")
+             elif selected_lab == "Other" and not (other_lab_name or "").strip():
+                 st.error("Lab name is required for 'Other'.")
+             else:
+                 st.session_state["new_case_labs"] = list(st.session_state.get("new_case_labs") or []) + [
+                     {
+                         "lab": selected_lab,
+                         "date": selected_lab_date.isoformat(),
+                         "value": lab_value,
+                         "other_name": (other_lab_name or "").strip(),
+                     }
+                 ]
+
+         if st.session_state.get("new_case_labs"):
+             st.caption("Added lab results")
+             st.json(st.session_state.get("new_case_labs"))
+             if st.button("Clear added labs"):
+                 st.session_state["new_case_labs"] = []
+
+         if st.button("Add case to patient list"):
+             pid = (new_patient_id or "").strip()
+             name = (new_name or "").strip()
+             regimen_items = [r.strip() for r in (new_regimen or "").split(",") if r.strip()]
+
+             if not pid or not name or not regimen_items:
+                 st.error("Patient ID, display name, and regimen are required.")
+             elif any((p.get("patient_id") == pid) for p in (list(patients) + custom_patients)):
+                 st.error("That Patient ID already exists in the current patient list.")
+             else:
+                 encounter_iso = new_encounter_date.isoformat()
+
+                 patient_record: Dict[str, Any] = {
+                     "patient_id": pid,
+                     "name": name,
+                     "art_regimen_current": regimen_items,
+                     "visits": [],
+                     "labs": {},
+                     "today_encounter": {
+                         "date": encounter_iso,
+                         # Rationale: the add-case form captures history only; the
+                         # clinician enters the current-day note after selecting the
+                         # patient from the list.
+                         "note": "",
+                         "orders": [],
+                         "med_changes": [],
+                     },
+                 }
+
+                 prev_note = (new_prev_note or "").strip()
+                 if prev_note:
+                     patient_record["visits"].append(
+                         {
+                             "date": encounter_iso,
+                             "type": "routine",
+                             "clinician_note": prev_note,
+                         }
+                     )
+
+                 # Rationale: allow arbitrary lab entry; preserve existing keys for
+                 # viral_load/creatinine so current rules continue to work.
+                 for entry in list(st.session_state.get("new_case_labs") or []):
+                     lab_label = str(entry.get("lab") or "").strip()
+                     date_iso = str(entry.get("date") or "").strip()
+                     raw_value = str(entry.get("value") or "").strip()
+
+                     if not lab_label or not date_iso or not raw_value:
+                         continue
+
+                     if lab_label == "Other":
+                         lab_key = (entry.get("other_name") or "").strip().lower().replace(" ", "_")
+                         if not lab_key:
+                             continue
+                     else:
+                         lab_key = lab_key_map.get(lab_label)
+                         if not lab_key:
+                             continue
+
+                     patient_record["labs"].setdefault(lab_key, [])
+
+                     if lab_key == "viral_load":
+                         try:
+                             patient_record["labs"][lab_key].append(
+                                 {"date": date_iso, "value_copies_per_ml": int(float(raw_value))}
+                             )
+                         except Exception:
+                             patient_record["labs"][lab_key].append({"date": date_iso, "value": raw_value})
+                     elif lab_key == "creatinine":
+                         try:
+                             patient_record["labs"][lab_key].append(
+                                 {"date": date_iso, "value_umol_per_l": float(raw_value)}
+                             )
+                         except Exception:
+                             patient_record["labs"][lab_key].append({"date": date_iso, "value": raw_value})
+                     else:
+                         patient_record["labs"][lab_key].append({"date": date_iso, "value": raw_value})
+
+                 # Rationale: keep the local list in sync so the newly added patient
+                 # appears in the list immediately on this rerun.
+                 custom_patients = custom_patients + [patient_record]
+                 st.session_state["custom_patients"] = custom_patients
+                 st.session_state["new_case_labs"] = []
+                 # Rationale: auto-select the newly added patient to make it clear
+                 # the add succeeded.
+                 st.session_state["selected_patient_label"] = f"{pid} - {name}"
+                 st.success("Case added. Select it from the patient list below.")
+
+     if custom_patients:
+         # Rationale: keep demo patients first, then any manually-added cases.
+         patients = list(patients) + custom_patients
  
      st.subheader("Encounter")
  
      patient_labels = [f"{p.get('patient_id')} - {p.get('name')}" for p in patients]
-     selected_label = st.selectbox("Select patient", patient_labels)
+     # Rationale: persist patient selection across reruns, and safely reset if the
+     # selected value no longer exists (e.g., list changed).
+     if (
+         st.session_state.get("selected_patient_label") is None
+         or st.session_state.get("selected_patient_label") not in patient_labels
+     ):
+         st.session_state["selected_patient_label"] = patient_labels[0]
+
+     selected_label = st.selectbox(
+         "Select patient",
+         patient_labels,
+         key="selected_patient_label",
+     )
      selected_index = patient_labels.index(selected_label)
      patient = patients[selected_index]
  
      today_note_default = (patient.get("today_encounter", {}) or {}).get("note") or ""
-     today_note = st.text_area("Today's encounter note", value=today_note_default, height=140)
+     # Rationale: key by patient_id so switching patients shows the correct note input.
+     today_note = st.text_area(
+         "Today's encounter note",
+         value=today_note_default,
+         height=140,
+         key=f"today_note_{patient.get('patient_id')}",
+     )
  
      with st.expander("Advanced settings", expanded=False):
          prefer_chroma = st.checkbox("Prefer Chroma (persistent)", value=True)
@@ -260,7 +468,16 @@ def main() -> None:
                  if explanation.used_llm:
                      st.caption("Generated with local LLM (Ollama) using retrieved excerpts.")
                  else:
-                     st.caption("Deterministic fallback explanation (LLM unavailable/disabled).")
+                     if st.session_state.get("analysis_use_ollama"):
+                         st.caption("Deterministic fallback explanation (LLM unavailable).")
+                         model = st.session_state.get("analysis_ollama_model")
+                         err = st.session_state.get("analysis_ollama_error")
+                         if model:
+                             st.caption(f"Ollama model: {model}")
+                         if err:
+                             st.caption(f"Ollama debug: {err}")
+                     else:
+                         st.caption("Deterministic fallback explanation (LLM disabled).")
                  st.write(explanation.text)
  
                  st.markdown("**Acknowledge / Override**")

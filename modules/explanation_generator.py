@@ -81,7 +81,8 @@ def _try_llm_explanation(
             "You are a clinical decision support assistant. "
             "Only use the provided guideline excerpts as evidence. "
             "If information is missing, say so. "
-            "Always include at least one *quoted* guideline excerpt and a citation in the form (page=<page_number>, chunk_id=<chunk_id>). "
+            "If no excerpts are provided, say you cannot give guideline-grounded suggestions. "
+            "Always include at least one *quoted* guideline excerpt and a citation in the form (page=<page_number>, chunk_id=<chunk_id>) when excerpts are provided. "
             "Use suggestive language (e.g., 'Consider...')."
         ),
     }
@@ -97,10 +98,12 @@ def _try_llm_explanation(
             f"Alert evidence: {alert.evidence}\n\n"
             "Guideline excerpts (use these for citations):\n"
             f"{chunks_block}\n\n"
-            "Write a short explanation with:\n"
-            "1) Why this alert triggered (based on evidence)\n"
-            "2) What the clinician might consider doing next\n"
-            "3) One or more citations to the provided excerpts"
+            "Write a short, structured response with these sections:\n"
+            "1) Why this alert triggered (based on the patient evidence above)\n"
+            "2) Plausible reasons / considerations (only if supported by excerpts; otherwise say 'Not specified in excerpts')\n"
+            "3) Questions to ask / next steps (grounded in excerpts)\n"
+            "4) Suggested urgency / timeframe (only if supported by excerpts; otherwise say 'Not specified in excerpts')\n"
+            "5) Citations: include at least one *quoted* excerpt with (page=<page_number>, chunk_id=<chunk_id>) when excerpts are provided"
         ),
     }
 

@@ -135,6 +135,7 @@ MegGemma Kaggle Project 2026/
     - [ ] Add a new patient data source option in the UI:
       - [ ] **Option A (recommended first):** upload/import a file (JSON/CSV) for testing.
       - [ ] **Option B (later):** connect to a live system (e.g., EMR) via an API.
+    - [x] Add a simple “Add patient case” form in the UI for manual entry (supports quick colleague testing without editing JSON).
     - [ ] Define and document a “live patient” input schema (minimal fields required by rules):
       - [ ] patient identifier (or test ID), encounter date, current regimen
       - [ ] labs: viral load (date/value), creatinine (date/value) where relevant
