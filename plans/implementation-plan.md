@@ -7,11 +7,12 @@ This document is an auto-generated implementation plan. It will be used to guide
 - **Primary Goal:** Build a local-first Streamlit proof-of-concept that, after a clinician saves an encounter, analyzes longitudinal HIV patient data + today’s visit against Uganda HIV guidelines (local PDF) using RAG and produces clinician-friendly, guideline-cited alerts.
 - **Core Principles:**
   - Deterministic alert triggering (rules) for demo reliability; LLM is used for explanation + guideline citation formatting.
+  - LLM-assisted guideline audit can produce a structured checklist of “things to check in this visit” (labs/monitoring/regimen considerations) grounded in retrieved guideline excerpts; checklist items are treated as alerts that must be acknowledged/overridden, and deterministic rules remain as a fallback/backup for safety and reproducibility.
   - Local-first operation: guidelines PDF is local; vector DB local; LLM served locally via Ollama.
   - Traceability: every alert shows the patient evidence used and the retrieved guideline chunk.
   - Safety: synthetic data only; disclaimer in UI.
 - **Success Criteria:**
-  - Guidelines PDF at `Data/Uganda Clinical Guidelines 2023.pdf` is processed into searchable chunks with metadata.
+  - Guidelines PDF at `Data/Consolidated-HIV-and-AIDS-Guidelines-20230516.pdf` is processed into searchable chunks with metadata.
   - For each demo patient, the app returns Green (no alerts) or Yellow (>=1 alert) as expected.
   - Each alert displays:
     - Patient evidence (e.g., last creatinine date, regimen, symptom mention)
@@ -28,7 +29,7 @@ MegGemma Kaggle Project 2026/
 ├── requirements.txt
 ├── README.md
 ├── Data/
-│   ├── Uganda Clinical Guidelines 2023.pdf
+│   ├── Consolidated-HIV-and-AIDS-Guidelines-20230516.pdf
 │   ├── mock_patients.json
 │   └── (optional) precomputed_guideline_chunks.json
 ├── storage/
@@ -62,7 +63,7 @@ MegGemma Kaggle Project 2026/
 
 - [x] **Task 2: Guideline ingestion + chunking**
   - [x] Implement `modules/guideline_processor.py`:
-    - [x] Extract text from `Data/Uganda Clinical Guidelines 2023.pdf`.
+    - [x] Extract text from `Data/Consolidated-HIV-and-AIDS-Guidelines-20230516.pdf`.
     - [x] Chunk into semantic-ish blocks (start with simple paragraph/heading heuristics).
     - [x] Attach metadata per chunk (source filename, page number if available, chunk_id).
   - [x] Create a small smoke test that returns a non-empty set of chunks.
@@ -124,6 +125,7 @@ MegGemma Kaggle Project 2026/
 - [ ] **Task 10: Demo readiness**
   - [ ] Add a “Demo mode” toggle that loads prebuilt mock patients.
   - [ ] Add a “Show pipeline” panel (Parse → Retrieve → Generate) to explain RAG.
+  - [ ] Include an “Audit checklist output” example in the pipeline panel (what the model checked + which guideline excerpts were used).
 
 - [ ] **Task 11: Pilot / live-readiness (real data testing)**
   - **Goal:** Allow colleagues to test the app using realistic patient scenarios (real or de-identified) while protecting privacy and maintaining safety.
@@ -190,6 +192,17 @@ MegGemma Kaggle Project 2026/
       - [ ] Require that each suggestion is grounded in retrieved guideline excerpts (quoted + cited).
       - [ ] Rationale: increases clinical value beyond “an alert exists”, while staying evidence-based.
 
+    - [ ] **11.6.4 Guideline audit checklist (LLM-first, rules as backup)**
+      - [ ] Use MedGemma + retrieved guideline excerpts to produce a structured checklist for the current visit, e.g.:
+        - [ ] recommended checks/labs to consider based on today’s note + longitudinal history
+        - [ ] monitoring interval reminders (where supported by retrieved guideline excerpts)
+        - [ ] questions to clarify missing information before acting
+      - [ ] Require that each checklist item includes a quoted + cited guideline excerpt (or explicitly states that guideline evidence was not retrieved).
+      - [ ] Default to a safe fallback response when retrieval is empty/low-quality (do not “make up” guideline recommendations).
+      - [ ] Present checklist items as alert-like items in the UI, requiring Acknowledge/Override (with a reason) before Finalize.
+      - [ ] Keep deterministic alert rules as a backup layer for high-value safety checks and reproducibility.
+      - [ ] Rationale: matches clinician expectations (a visit checklist) while retaining a deterministic safety net.
+
     - [ ] **11.6.3 Model-proposed new rules with clinician approval (rule growth over time)**
       - [ ] Add a workflow where, when a new scenario arises, MedGemma can propose a candidate rule:
         - [ ] proposed rule name + trigger criteria
@@ -206,12 +219,57 @@ MegGemma Kaggle Project 2026/
       - [ ] Small on-prem server mode (shared within a clinic network)
     - [ ] Define environment requirements (Python, model availability, guideline PDF path).
 
+- [ ] **Task 12: MedGemma Stage 1–3 Safety Pipeline (MVP)**
+  - **Goal:** Integrate a laptop-friendly version of the colleague’s Stage 1–3 design without disrupting existing deterministic rules or UI workflow.
+  - [ ] **12.1 Stage 1 (deterministic JSON extraction)**
+    - [ ] Produce a structured JSON summary from the patient record (no LLM), including:
+      - [ ] past labs with dates (extend beyond creatinine/VL as data allows)
+      - [ ] past key complaints with dates (light heuristics from notes)
+      - [ ] past clinician plans with dates (light heuristics from notes)
+      - [ ] regimen history with switch dates (if available)
+      - [ ] current regimen and current non-HIV medications (if available)
+      - [ ] current labs with dates
+      - [ ] today’s plan (from today note/orders)
+    - [ ] Mark missing fields explicitly; keep schema stable for downstream stages.
+  - [ ] **12.2 Stage 2 (RAG evidence bundle)**
+    - [ ] Drive retrieval from Stage 1 signals (e.g., per active drug or drug class).
+    - [ ] Add an optional page-range filter for consolidated HIV guideline pages 99–114 using chunk metadata.
+    - [ ] Keep `top_k` small (2–4) and return a compact evidence bundle (chunk_id, page_number, quote).
+  - [ ] **12.3 Stage 3 (single-call LLM synthesis → structured issues)**
+    - [ ] Create one LLM prompt that ingests Stage 1 JSON + Stage 2 evidence bundle and outputs JSON issues with fields:
+      - [ ] `issue_type` [monitoring_gap | ddi | toxicity_pattern]
+      - [ ] `severity` [high | medium | low]
+      - [ ] `guideline_reference` (section/page)
+      - [ ] `already_in_plan` [yes | no]
+      - [ ] `nudge_needed` [yes | no]
+    - [ ] Map issues to existing `Alert` objects for the same ack/override gating.
+  - [ ] **12.4 LLM call management (latency control)**
+    - [ ] Add an "LLM mode" selector in UI with:
+      - [ ] Checklist only (1 call; current audit checklist)
+      - [ ] Synthesis (1 call; Stage 3 issues)
+      - [ ] Per‑alert explanations (N calls; mark as slow)
+    - [ ] Default to Checklist only; keep deterministic rules always active.
+  - [ ] **12.5 LLM settings UI**
+    - [ ] Add model selector (default `aadide/medgemma-1.5-4b-it-Q4_K_S`), with a "Custom" input; respect `OLLAMA_MODEL` env override and show a notice when active.
+    - [ ] Add `num_ctx` selector (e.g., 2048/4096/8192) and pass to Ollama `options` alongside `num_predict`.
+  - [ ] **12.6 Performance & GPU guidance (dev notes)**
+    - [ ] Keep RAG `top_k` small and excerpt truncation in prompts.
+    - [ ] Cap `num_predict` (e.g., 256) and prefer a single LLM call per Save.
+    - [ ] Prefer small quantized models; verify GPU usage via `ollama ps`.
+    - [ ] Consider streaming later for UX; keep timeout safeguards.
+
 ## 4. Acceptance Tests (manual)
 
 - [ ] On a mock patient with no issues, Save produces Green and no alerts.
 - [ ] On the TDF monitoring patient, Save produces Yellow with an overdue-monitoring alert and guideline citation.
+- [ ] On a case with a symptom mention in today’s note, the app produces a guideline-cited “things to check” checklist item (or a safe fallback if no relevant guideline excerpts are retrieved).
 - [ ] Finalize is blocked until each alert is acknowledged or overridden with a reason.
 - [ ] “Retrieved guideline chunks” are viewable per alert.
+ - [ ] With "Page range 99–114" enabled, retrieval returns only chunks within that range (or a safe empty result).
+ - [ ] Stage 3 synthesis (LLM mode=Synthesis) returns structured JSON issues mapped to Alerts.
+ - [ ] A DDI scenario surfaces a `ddi` issue with a guideline reference and a nudge only if not already in clinician’s plan.
+ - [ ] A missed prior plan (e.g., “recheck Cr next visit”) is detected and nudged if not executed.
+ - [ ] Switching LLM modes changes the number of LLM calls per Save accordingly (Checklist: 1, Synthesis: 1, Per‑alert: N).
 
 ## 5. Notes / Open Questions
 

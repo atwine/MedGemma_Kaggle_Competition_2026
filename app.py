@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import copy
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -15,8 +16,12 @@ import streamlit as st
 
 from modules.alert_rules import Alert, run_alerts
 from modules.embedder import Embedder, EmbedderConfig
-from modules.explanation_generator import ExplanationResult, generate_explanation
-from modules.llm_client import OllamaClient
+from modules.explanation_generator import (
+    ExplanationResult,
+    generate_audit_checklist_alerts,
+    generate_explanation,
+)
+from modules.llm_client import OllamaClient, OllamaConfig
 from modules.patient_parser import build_patient_context, load_mock_patients
 from modules.rag_engine import RagEngine
 from modules.vector_store import VectorSearchResult, create_vector_store
@@ -33,11 +38,8 @@ NCD_GUIDELINE_PDF_PATH = (
 
 # Rationale: prefer the newer consolidated guideline PDF when present, but keep a
 # fallback to the legacy filename to avoid breaking existing setups.
-GUIDELINE_PDF_PATHS = [
-    p
-    for p in [CONSOLIDATED_GUIDELINE_PDF_PATH, LEGACY_GUIDELINE_PDF_PATH, NCD_GUIDELINE_PDF_PATH]
-    if p.exists()
-]
+# Note: for this demo we embed/index only the consolidated guideline PDF.
+GUIDELINE_PDF_PATHS = [p for p in [CONSOLIDATED_GUIDELINE_PDF_PATH] if p.exists()]
 MOCK_PATIENTS_PATH = PROJECT_ROOT / "Data" / "mock_patients.json"
 
 
@@ -58,6 +60,7 @@ def _get_rag_engine(
     *,
     prefer_chroma: bool,
     embedding_model_name: str,
+    engine_version: int = 3,
 ) -> RagEngine:
     # Rationale: keep a single vector store + embedder + engine per session.
     embedder = _get_embedder(embedding_model_name)
@@ -71,10 +74,19 @@ def _get_rag_engine(
         .replace(":", "_")
         .replace(" ", "_")
     )
+
+    # Rationale: persistent Chroma collections keep old indexed chunks. Include the
+    # active guideline PDF in the collection name to prevent mixing chunks from
+    # previous documents and to force a clean re-index when the source PDF changes.
+    guideline_key = "no_guideline"
+    if GUIDELINE_PDF_PATHS:
+        guideline_key = (
+            GUIDELINE_PDF_PATHS[0].stem.strip().lower().replace(" ", "_").replace("+", "_")
+        )
     vector_store = create_vector_store(
         project_root=PROJECT_ROOT,
         prefer_chroma=prefer_chroma,
-        collection_name=f"uganda_hiv_guidelines__{model_key}",
+        collection_name=f"uganda_hiv_guidelines__{model_key}__{guideline_key}",
     )
     return RagEngine(
         project_root=PROJECT_ROOT,
@@ -132,7 +144,11 @@ def _run_analysis(
     embedding_model_name: str,
     top_k: int,
     index_max_pages: Optional[int],
+    retrieval_page_range: Optional[tuple[int, int]],
     use_ollama: bool,
+    llm_mode: str,
+    ollama_model: Optional[str],
+    ollama_num_ctx: Optional[int],
 ) -> None:
     # Rationale: keep analysis deterministic for alert triggering, and only use the
     # LLM for explanation/citation if available.
@@ -144,6 +160,83 @@ def _run_analysis(
     context = build_patient_context(patient_copy)
     alerts = run_alerts(context)
 
+    rag = _get_rag_engine(
+        prefer_chroma=prefer_chroma,
+        embedding_model_name=embedding_model_name,
+        # Rationale: cache-bust to refresh class definition after code change (Stage 2 API).
+        engine_version=3,
+    )
+
+    # Rationale: indexing can be expensive; we allow limiting pages for a faster demo.
+    if GUIDELINE_PDF_PATHS:
+        rag.ensure_indexed(max_pages=index_max_pages)
+
+    llm_client = None
+    if use_ollama:
+        cfg = OllamaConfig(model=(ollama_model or "aadide/medgemma-1.5-4b-it-Q4_K_S"), num_ctx=ollama_num_ctx)
+        llm_client = OllamaClient(cfg)
+
+    # Status box for any LLM activity in this run.
+    ollama_status = st.status("Ollama: idle", expanded=False) if use_ollama else None
+
+    ollama_error: Optional[str] = None
+
+    # Rationale: LLM-first audit checklist layer (Option B) - checklist items are
+    # represented as Alert objects and must be acknowledged/overridden before Finalize.
+    checklist_seed = Alert(
+        alert_id="llm_checklist_seed",
+        title="Guideline audit checklist",
+        message="LLM audit checklist seed",
+        evidence={"type": "llm_audit_checklist_seed"},
+        query_hint="visit audit checklist labs monitoring regimen",
+    )
+    # Rationale: compatibility — during hot-reload, a cached RagEngine may not yet
+    # accept the new page_range kw. Try new signature first, then fall back.
+    try:
+        checklist_retrieved = rag.retrieve_for_alert(
+            patient_context=context,
+            alert=checklist_seed,
+            top_k=top_k,
+            page_range=retrieval_page_range,
+        )
+    except (TypeError, ValueError):
+        checklist_retrieved = rag.retrieve_for_alert(
+            patient_context=context,
+            alert=checklist_seed,
+            top_k=top_k,
+        )
+    # Client-side guard: enforce page-range bounds post-retrieval to avoid any caching/store drift.
+    if retrieval_page_range is not None:
+        lo, hi = retrieval_page_range
+        checklist_retrieved = [
+            r for r in checklist_retrieved
+            if (r.metadata.get("page_number") is not None and int(r.metadata.get("page_number")) >= int(lo) and int(r.metadata.get("page_number")) <= int(hi))
+        ]
+
+    if ollama_status is not None:
+        # Rationale: the first LLM call is a good proxy for "Ollama connected".
+        ollama_status.update(label="Ollama: generating audit checklist…", state="running")
+    # Manage LLM calls by mode: checklist vs per‑alert explanations.
+    checklist_llm = llm_client if (use_ollama and llm_mode in ["Checklist only", "Synthesis"]) else None
+    explanation_llm = llm_client if (use_ollama and llm_mode == "Per-alert explanations") else None
+
+    if ollama_status is not None and checklist_llm is not None:
+        ollama_status.update(label="Ollama: generating audit checklist…", state="running")
+    checklist_alerts = generate_audit_checklist_alerts(
+        patient_context=context,
+        retrieved_chunks=checklist_retrieved,
+        llm_client=checklist_llm,
+    )
+
+    if ollama_status is not None and checklist_llm is not None:
+        last_err = checklist_llm.last_error if checklist_llm is not None else None
+        if last_err:
+            ollama_status.update(label=f"Ollama error: {last_err}", state="error")
+        else:
+            ollama_status.update(label="Ollama connected (response received)", state="complete")
+    if checklist_alerts:
+        alerts = list(alerts) + checklist_alerts
+
     # Rationale: reset per-alert review state for each analysis run. Without this,
     # a previous acknowledgment/override can incorrectly allow finalize on a new
     # Save without review.
@@ -152,33 +245,64 @@ def _run_analysis(
         st.session_state[f"alert_override_reason_{alert.alert_id}"] = ""
         st.session_state[f"alert_override_comment_{alert.alert_id}"] = ""
 
-    rag = _get_rag_engine(
-        prefer_chroma=prefer_chroma,
-        embedding_model_name=embedding_model_name,
-    )
-
-    # Rationale: indexing can be expensive; we allow limiting pages for a faster demo.
-    if GUIDELINE_PDF_PATHS:
-        rag.ensure_indexed(max_pages=index_max_pages)
-
-    llm_client = OllamaClient() if use_ollama else None
-
-    ollama_error: Optional[str] = None
-
     results: List[Dict[str, Any]] = []
     for alert in alerts:
-        retrieved = rag.retrieve_for_alert(patient_context=context, alert=alert, top_k=top_k)
-        explanation = generate_explanation(
-            patient_context=context,
-            alert=alert,
-            retrieved_chunks=retrieved,
-            llm_client=llm_client,
-        )
+        if (alert.evidence or {}).get("type") == "llm_audit_checklist":
+            # Rationale: checklist alerts already contain LLM-produced guidance and
+            # citations; avoid additional LLM calls per checklist item.
+            retrieved: List[VectorSearchResult] = []
+            explanation = ExplanationResult(
+                text=alert.message,
+                used_chunks=[],
+                used_llm=False,
+            )
+        else:
+            try:
+                retrieved = rag.retrieve_for_alert(
+                    patient_context=context,
+                    alert=alert,
+                    top_k=top_k,
+                    # Rationale: Stage 2 — propagate page range filter for per-alert retrieval.
+                    page_range=retrieval_page_range,
+                )
+            except (TypeError, ValueError):
+                retrieved = rag.retrieve_for_alert(
+                    patient_context=context,
+                    alert=alert,
+                    top_k=top_k,
+                )
+            # Client-side guard: enforce page-range bounds post-retrieval to avoid any caching/store drift.
+            if retrieval_page_range is not None:
+                lo, hi = retrieval_page_range
+                retrieved = [
+                    r for r in retrieved
+                    if (r.metadata.get("page_number") is not None and int(r.metadata.get("page_number")) >= int(lo) and int(r.metadata.get("page_number")) <= int(hi))
+                ]
+
+            if ollama_status is not None and explanation_llm is not None:
+                # Rationale: per-alert LLM calls may each take time; show which step is active.
+                ollama_status.update(
+                    label=f"Ollama: generating explanation for '{alert.title}'…",
+                    state="running",
+                )
+            explanation = generate_explanation(
+                patient_context=context,
+                alert=alert,
+                retrieved_chunks=retrieved,
+                llm_client=explanation_llm,
+            )
+
+            if ollama_status is not None and explanation_llm is not None:
+                last_err = explanation_llm.last_error if explanation_llm is not None else None
+                if last_err:
+                    ollama_status.update(label=f"Ollama error: {last_err}", state="error")
+                else:
+                    ollama_status.update(label="Ollama connected (response received)", state="complete")
 
         # Rationale: capture the first LLM failure reason so the UI can show why
         # it fell back to deterministic mode.
-        if llm_client is not None and not explanation.used_llm:
-            last_err = llm_client.last_error
+        if explanation_llm is not None and not explanation.used_llm:
+            last_err = explanation_llm.last_error
             if last_err and ollama_error is None:
                 ollama_error = last_err
 
@@ -196,7 +320,8 @@ def _run_analysis(
     st.session_state["analysis_results"] = results
     st.session_state["analysis_status"] = _compute_overall_status(alerts)
     st.session_state["analysis_use_ollama"] = bool(use_ollama)
-    st.session_state["analysis_ollama_model"] = llm_client.model if llm_client is not None else None
+    _client_used = (checklist_llm or explanation_llm)
+    st.session_state["analysis_ollama_model"] = _client_used.model if _client_used is not None else None
     st.session_state["analysis_ollama_error"] = ollama_error
 
 
@@ -424,22 +549,49 @@ def main() -> None:
         prefer_chroma = st.checkbox("Prefer Chroma (persistent)", value=True)
         embedding_model_name = st.text_input(
             "Embedding model (SentenceTransformers)",
-            value="pritamdeka/S-PubMedBert-MS-MARCO",
+            value="all-MiniLM-L6-v2",
         )
         top_k = st.slider("Top-K guideline chunks", min_value=1, max_value=10, value=5)
+        # Rationale: ensure this is always defined to avoid UnboundLocalError.
+        index_max_pages: Optional[int] = 10
         index_pages_choice = st.selectbox(
-            "Index max pages (faster demo)",
-            ["All", "20", "50", "100"],
+            "Index max pages",
+            options=["All", "10", "20", "50", "100"],
             index=1,
         )
-        index_max_pages: Optional[int]
         if index_pages_choice == "All":
             index_max_pages = None
         else:
             index_max_pages = int(index_pages_choice)
 
+        # Rationale: Stage 2 — optional retrieval filter by guideline page range.
+        retrieval_page_range: Optional[tuple[int, int]] = None
+        retrieval_pages_choice = st.selectbox(
+            "Retrieval page range",
+            options=["All", "99–114"],
+            index=0,
+            help="Constrain RAG retrieval to specific guideline pages (uses chunk metadata).",
+        )
+        if retrieval_pages_choice == "99–114":
+            retrieval_page_range = (99, 114)
+
     with st.expander("LLM settings", expanded=False):
         use_ollama = st.checkbox("Use Ollama for explanations (if available)", value=True)
+        llm_mode = st.selectbox(
+            "LLM mode",
+            ["Checklist only", "Synthesis", "Per-alert explanations"],
+            index=0,
+        )
+        env_model = (os.getenv("OLLAMA_MODEL") or "").strip()
+        model_options = ["aadide/medgemma-1.5-4b-it-Q4_K_S", "Custom..."]
+        model_choice = st.selectbox("Ollama model", model_options, index=0)
+        if model_choice == "Custom...":
+            ollama_model_ui = st.text_input("Custom model tag", value=(env_model or ""))
+        else:
+            ollama_model_ui = model_options[0]
+        if env_model:
+            st.caption(f"OLLAMA_MODEL is set: {env_model} (UI model selection will be ignored)")
+        num_ctx = st.selectbox("Context window (num_ctx)", [2048, 4096, 8192], index=1)
 
     save_disabled = not bool(GUIDELINE_PDF_PATHS)
     if st.button("Save encounter (run checks)", disabled=save_disabled):
@@ -450,7 +602,11 @@ def main() -> None:
             embedding_model_name=embedding_model_name,
             top_k=top_k,
             index_max_pages=index_max_pages,
+            retrieval_page_range=retrieval_page_range,
             use_ollama=use_ollama,
+            llm_mode=llm_mode,
+            ollama_model=ollama_model_ui,
+            ollama_num_ctx=int(num_ctx),
         )
 
     st.subheader("Results")

@@ -18,7 +18,11 @@ class ChatMessage(TypedDict):
 @dataclass(frozen=True)
 class OllamaConfig:
     # Rationale: default to the locally pulled model tag to avoid mismatches.
-    model: str = "alibayram/medgemma:4b"
+    model: str = "aadide/medgemma-1.5-4b-it-Q4_K_S"
+    # Rationale: allow setting the context window per request without changing server env.
+    # Matches Ollama `num_ctx` parameter. [src]
+    # - https://raw.githubusercontent.com/ollama/ollama/main/docs/modelfile.mdx#valid-parameters-and-values
+    num_ctx: Optional[int] = None
 
 
 class OllamaClient:
@@ -48,6 +52,8 @@ class OllamaClient:
 
         # Rationale: surface the last failure reason to the UI for debugging.
         self._last_error: Optional[str] = None
+        # Rationale: store num_ctx to pass via options when set.
+        self._num_ctx: Optional[int] = cfg.num_ctx
 
     @property
     def model(self) -> str:
@@ -77,8 +83,22 @@ class OllamaClient:
             self._last_error = None
             # Rationale: use an explicit client so we can control the host used for
             # connectivity debugging.
-            client = Client(host=self._host)
-            response = client.chat(model=self._model, messages=messages)
+            client = Client(host=self._host, timeout=120.0)
+            # Rationale: keep outputs more deterministic for clinical UX.
+            # Ollama supports passing generation parameters via `options` (e.g., temperature). [src]
+            # - https://raw.githubusercontent.com/ollama/ollama/main/docs/api.md
+            chat_options = {
+                "temperature": 0.3,
+                "num_predict": 256,
+            }
+            if self._num_ctx is not None:
+                chat_options["num_ctx"] = int(self._num_ctx)
+
+            response = client.chat(
+                model=self._model,
+                messages=messages,
+                options=chat_options,
+            )
             # Rationale: ollama-python supports both dict-style and object-style
             # access for responses. [src]
             # - https://raw.githubusercontent.com/ollama/ollama-python/main/README.md

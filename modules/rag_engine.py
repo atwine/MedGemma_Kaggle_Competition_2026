@@ -85,21 +85,38 @@ class RagEngine:
         patient_context: PatientContext,
         alert: Alert,
         top_k: Optional[int] = None,
+        page_range: Optional[tuple[int, int]] = None,
     ) -> List[VectorSearchResult]:
         """Retrieve guideline chunks relevant to a given alert."""
 
         query = self._build_query(patient_context=patient_context, alert=alert)
         k = self._config.top_k if top_k is None else top_k
-        return self._vector_store.query(query, self._embedder, top_k=k)
+        # Rationale: Stage 2 support — optionally restrict retrieval to a PDF page range.
+        results = self._vector_store.query(query, self._embedder, top_k=k, page_range=page_range)
+        # Defensive: enforce the page bounds even if the underlying store ignores the filter.
+        if page_range is not None:
+            lo, hi = page_range
+            results = [
+                r for r in results
+                if (r.metadata.get("page_number") is not None and int(r.metadata.get("page_number")) >= int(lo) and int(r.metadata.get("page_number")) <= int(hi))
+            ]
+        return results
 
     def _build_query(self, *, patient_context: PatientContext, alert: Alert) -> str:
         # Rationale: We keep query building simple and transparent for auditability.
         regimen = ", ".join(patient_context.art_regimen_current) or "unknown regimen"
         note_excerpt = (patient_context.notes_text or "").strip()[:500]
 
+        # Rationale: include alert details to improve retrieval specificity; the LLM
+        # still only sees the top_k retrieved excerpts, not the whole PDF.
+        evidence_excerpt = str(alert.evidence or "")[:400]
+        alert_message_excerpt = (alert.message or "").strip()[:300]
+
         return (
             f"Alert: {alert.title}\n"
             f"Hint: {alert.query_hint}\n"
+            f"Alert message: {alert_message_excerpt}\n"
+            f"Alert evidence: {evidence_excerpt}\n"
             f"Patient regimen: {regimen}\n"
             f"Encounter date: {patient_context.encounter_date.isoformat()}\n"
             f"Notes excerpt: {note_excerpt}"

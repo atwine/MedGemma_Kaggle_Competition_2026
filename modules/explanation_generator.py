@@ -10,6 +10,8 @@ If the LLM is unavailable, it falls back to a deterministic explanation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from typing import Any, Dict
 from typing import List, Optional
 
 from modules.alert_rules import Alert
@@ -25,6 +27,80 @@ class ExplanationResult:
     used_llm: bool
 
 
+def generate_audit_checklist_alerts(
+    *,
+    patient_context: PatientContext,
+    retrieved_chunks: List[VectorSearchResult],
+    llm_client: Optional[OllamaClient] = None,
+) -> List[Alert]:
+    """Generate visit audit checklist items as Alert objects.
+
+    Notes:
+    - This is an LLM-first layer intended to surface "things to check this visit".
+    - Safe fallback: if retrieval is empty, return no checklist alerts.
+    """
+
+    used_chunks = list(retrieved_chunks[:5])
+    if not used_chunks:
+        return []
+
+    if llm_client is None:
+        return []
+
+    llm_text = _try_llm_audit_checklist(
+        llm_client=llm_client,
+        patient_context=patient_context,
+        retrieved_chunks=used_chunks,
+    )
+    if not llm_text:
+        return []
+
+    try:
+        parsed = json.loads(llm_text)
+    except Exception:
+        return []
+
+    if not isinstance(parsed, list):
+        return []
+
+    alerts: List[Alert] = []
+    for i, item in enumerate(parsed[:6]):
+        if not isinstance(item, dict):
+            continue
+
+        title = str(item.get("title") or "Guideline audit checklist item").strip()
+        recommendation = str(item.get("recommendation") or "").strip()
+        urgency = str(item.get("urgency") or "").strip()
+        citations = item.get("citations")
+
+        if not recommendation:
+            continue
+
+        msg_lines: List[str] = [recommendation]
+        if urgency:
+            msg_lines.append(f"Urgency/timeframe: {urgency}")
+        message = "\n".join(msg_lines)
+
+        evidence: Dict[str, Any] = {
+            "type": "llm_audit_checklist",
+            "item": item,
+        }
+        if citations is not None:
+            evidence["citations"] = citations
+
+        alerts.append(
+            Alert(
+                alert_id=f"llm_checklist_{i+1}",
+                title=title,
+                message=message,
+                evidence=evidence,
+                query_hint="visit audit checklist labs monitoring regimen",
+            )
+        )
+
+    return alerts
+
+
 def generate_explanation(
     *,
     patient_context: PatientContext,
@@ -35,6 +111,15 @@ def generate_explanation(
     """Generate an explanation for an alert."""
 
     used_chunks = list(retrieved_chunks[:3])
+
+    # Rationale: safe fallback — if retrieval is empty, do not call the LLM.
+    # This prevents guideline-sounding output without any retrieved evidence.
+    if not used_chunks:
+        return ExplanationResult(
+            text=_fallback_explanation(patient_context, alert, used_chunks),
+            used_chunks=used_chunks,
+            used_llm=False,
+        )
 
     if llm_client is not None:
         llm_text = _try_llm_explanation(
@@ -69,8 +154,9 @@ def _try_llm_explanation(
     chunks_block_lines: List[str] = []
     for c in retrieved_chunks:
         page = c.metadata.get("page_number")
+        excerpt = (c.document or "")[:600]
         chunks_block_lines.append(
-            f"[chunk_id={c.chunk_id} page={page} distance={c.distance:.4f}] {c.document}"
+            f"[chunk_id={c.chunk_id} page={page} distance={c.distance:.4f}] {excerpt}"
         )
 
     chunks_block = "\n\n".join(chunks_block_lines) if chunks_block_lines else "(no chunks)"
@@ -104,6 +190,53 @@ def _try_llm_explanation(
             "3) Questions to ask / next steps (grounded in excerpts)\n"
             "4) Suggested urgency / timeframe (only if supported by excerpts; otherwise say 'Not specified in excerpts')\n"
             "5) Citations: include at least one *quoted* excerpt with (page=<page_number>, chunk_id=<chunk_id>) when excerpts are provided"
+        ),
+    }
+
+    return llm_client.chat([system, user])
+
+
+def _try_llm_audit_checklist(
+    *,
+    llm_client: OllamaClient,
+    patient_context: PatientContext,
+    retrieved_chunks: List[VectorSearchResult],
+) -> Optional[str]:
+    regimen = ", ".join(patient_context.art_regimen_current) or "unknown regimen"
+
+    chunks_block_lines: List[str] = []
+    for c in retrieved_chunks:
+        page = c.metadata.get("page_number")
+        excerpt = (c.document or "")[:600]
+        chunks_block_lines.append(
+            f"[chunk_id={c.chunk_id} page={page} distance={c.distance:.4f}] {excerpt}"
+        )
+    chunks_block = "\n\n".join(chunks_block_lines) if chunks_block_lines else "(no chunks)"
+
+    system: ChatMessage = {
+        "role": "system",
+        "content": (
+            "You are a clinical decision support assistant. "
+            "Only use the provided guideline excerpts as evidence. "
+            "If information is missing, say so. "
+            "Return ONLY valid JSON (no markdown)."
+        ),
+    }
+
+    user: ChatMessage = {
+        "role": "user",
+        "content": (
+            f"Patient: {patient_context.name} ({patient_context.patient_id})\n"
+            f"Encounter date: {patient_context.encounter_date.isoformat()}\n"
+            f"Current ART regimen: {regimen}\n\n"
+            f"Notes excerpt: {(patient_context.notes_text or '').strip()[:800]}\n\n"
+            "Guideline excerpts (use these for citations):\n"
+            f"{chunks_block}\n\n"
+            "Create a visit audit checklist: things that should be checked in this visit (labs/monitoring/questions) based on the patient context and the excerpts. "
+            "Each item must be grounded in the excerpts and include at least one quoted excerpt + citation. "
+            "Output JSON as a list of objects with keys: title, recommendation, urgency, citations. "
+            "The citations value must be a list of objects with keys: page_number, chunk_id, quote. "
+            "Return only JSON."
         ),
     }
 
