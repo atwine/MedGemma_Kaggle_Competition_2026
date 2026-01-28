@@ -129,6 +129,16 @@ def generate_explanation(
             retrieved_chunks=used_chunks,
         )
         if llm_text:
+            # Rationale: guarantee at least one citation appears when chunks exist. If the
+            # model omitted a (page=..., chunk_id=...) citation, append a deterministic
+            # citations block derived from used_chunks for auditability.
+            if used_chunks and (("(page=" not in llm_text) or ("chunk_id=" not in llm_text)):
+                citations_lines: List[str] = []
+                for c in used_chunks:
+                    page = c.metadata.get("page_number")
+                    excerpt = (c.document or "")[:200]
+                    citations_lines.append(f'- "{excerpt}" (page={page}, chunk_id={c.chunk_id})')
+                llm_text = llm_text + "\n\nCitations:\n" + "\n".join(citations_lines)
             return ExplanationResult(text=llm_text, used_chunks=used_chunks, used_llm=True)
 
     # Deterministic fallback.
@@ -138,6 +148,120 @@ def generate_explanation(
         used_llm=False,
     )
 
+
+def generate_stage3_synthesis_issues(
+    *,
+    patient_context: PatientContext,
+    deterministic_alerts: List[Alert],
+    evidence_map: Dict[str, List[VectorSearchResult]],
+    llm_client: Optional[OllamaClient],
+) -> List[Alert]:
+    """Single-call synthesis that produces structured issues and maps them to Alerts.
+
+    Rationale: Stage 3 requires exactly one LLM call; we package a compact Stage 1
+    alert summary and a Stage 2 evidence bundle (chunk_id, page_number, quote).
+    The model returns JSON issues which we convert to `Alert` objects for gating.
+    """
+
+    if llm_client is None:
+        return []
+
+    # Build Stage 1 compact alert JSON.
+    stage1 = [
+        {
+            "alert_id": a.alert_id,
+            "title": a.title,
+            "message": a.message,
+            "evidence": a.evidence,
+        }
+        for a in deterministic_alerts
+    ]
+
+    # Build Stage 2 compact evidence bundle.
+    stage2: Dict[str, List[Dict[str, Any]]] = {}
+    for aid, items in evidence_map.items():
+        bundle: List[Dict[str, Any]] = []
+        for r in list(items or [])[:3]:
+            bundle.append(
+                {
+                    "chunk_id": r.chunk_id,
+                    "page_number": r.metadata.get("page_number"),
+                    "quote": (r.document or "")[:320],
+                }
+            )
+        stage2[aid] = bundle
+
+    system: ChatMessage = {
+        "role": "system",
+        "content": (
+            "You are a clinical decision support assistant. "
+            "Use the provided alerts (Stage 1) and evidence bundle (Stage 2). "
+            "Return ONLY valid JSON: a list of issues, each with keys: "
+            "issue_type [monitoring_gap|ddi|toxicity_pattern], severity [high|medium|low], "
+            "guideline_reference (section/page), already_in_plan [yes|no], nudge_needed [yes|no]."
+        ),
+    }
+
+    user: ChatMessage = {
+        "role": "user",
+        "content": (
+            f"Patient: {patient_context.name} ({patient_context.patient_id})\n"
+            f"Encounter date: {patient_context.encounter_date.isoformat()}\n\n"
+            "Stage 1 alerts (deterministic JSON):\n"
+            f"{json.dumps(stage1, ensure_ascii=False)}\n\n"
+            "Stage 2 evidence bundle (by alert_id):\n"
+            f"{json.dumps(stage2, ensure_ascii=False)}\n\n"
+            "Create a list of issues as specified and return ONLY JSON."
+        ),
+    }
+
+    llm_text = llm_client.chat([system, user])
+    if not llm_text:
+        return []
+
+    try:
+        parsed = json.loads(llm_text)
+    except Exception:
+        return []
+
+    if not isinstance(parsed, list):
+        return []
+
+    out: List[Alert] = []
+    for i, item in enumerate(parsed[:8]):
+        if not isinstance(item, dict):
+            continue
+        issue_type = str(item.get("issue_type") or "issue").strip()
+        severity = str(item.get("severity") or "").strip()
+        guideline_reference = str(item.get("guideline_reference") or "").strip()
+        already_in_plan = str(item.get("already_in_plan") or "no").strip()
+        nudge_needed = str(item.get("nudge_needed") or "no").strip()
+
+        title = f"Synthesis: {issue_type}"
+        if severity:
+            title = f"{title} ({severity})"
+
+        msg_lines = [f"Guideline reference: {guideline_reference}" if guideline_reference else "Proposed issue"]
+        msg_lines.append(f"Already in plan: {already_in_plan}")
+        msg_lines.append(f"Nudge needed: {nudge_needed}")
+        message = "\n".join(msg_lines)
+
+        evidence: Dict[str, Any] = {
+            "type": "synthesis_issue",
+            "issue": item,
+        }
+
+        out.append(
+            Alert(
+                alert_id=f"synth_issue_{i+1}",
+                title=title,
+                message=message,
+                evidence=evidence,
+                query_hint="stage3 synthesis issues",
+            )
+        )
+
+    return out
 
 def _try_llm_explanation(
     *,

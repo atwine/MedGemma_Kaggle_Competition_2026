@@ -106,6 +106,7 @@ MegGemma Kaggle Project 2026/
   - [x] Implement `modules/explanation_generator.py`:
     - [x] Generate clinician-friendly “Why this alert?” text.
     - [x] Require inclusion of a quoted guideline excerpt in the answer.
+    - [x] If the model omits citations despite retrieved chunks, append a deterministic “Citations” block (page, chunk_id, quote).
 
 - [x] **Task 8: Streamlit UI (Save vs Finalize workflow)**
   - [x] Build `app.py` screens:
@@ -233,25 +234,26 @@ MegGemma Kaggle Project 2026/
     - [ ] Mark missing fields explicitly; keep schema stable for downstream stages.
   - [ ] **12.2 Stage 2 (RAG evidence bundle)**
     - [ ] Drive retrieval from Stage 1 signals (e.g., per active drug or drug class).
-    - [ ] Add an optional page-range filter for consolidated HIV guideline pages 99–114 using chunk metadata.
+    - [x] Add an optional page-range filter for consolidated HIV guideline pages 99–114 using chunk metadata.
     - [ ] Keep `top_k` small (2–4) and return a compact evidence bundle (chunk_id, page_number, quote).
   - [ ] **12.3 Stage 3 (single-call LLM synthesis → structured issues)**
-    - [ ] Create one LLM prompt that ingests Stage 1 JSON + Stage 2 evidence bundle and outputs JSON issues with fields:
-      - [ ] `issue_type` [monitoring_gap | ddi | toxicity_pattern]
-      - [ ] `severity` [high | medium | low]
-      - [ ] `guideline_reference` (section/page)
-      - [ ] `already_in_plan` [yes | no]
-      - [ ] `nudge_needed` [yes | no]
-    - [ ] Map issues to existing `Alert` objects for the same ack/override gating.
+    - [x] Create one LLM prompt that ingests Stage 1 JSON + Stage 2 evidence bundle and outputs JSON issues with fields:
+      - [x] `issue_type` [monitoring_gap | ddi | toxicity_pattern]
+      - [x] `severity` [high | medium | low]
+      - [x] `guideline_reference` (section/page)
+      - [x] `already_in_plan` [yes | no]
+      - [x] `nudge_needed` [yes | no]
+    - [x] Map issues to existing `Alert` objects for the same ack/override gating.
   - [ ] **12.4 LLM call management (latency control)**
-    - [ ] Add an "LLM mode" selector in UI with:
-      - [ ] Checklist only (1 call; current audit checklist)
-      - [ ] Synthesis (1 call; Stage 3 issues)
-      - [ ] Per‑alert explanations (N calls; mark as slow)
-    - [ ] Default to Checklist only; keep deterministic rules always active.
+    - [x] Add an "LLM mode" selector in UI with:
+      - [x] Checklist only (1 call; current audit checklist)
+      - [x] Synthesis (1 call; Stage 3 issues)
+      - [x] Per‑alert explanations (N calls; mark as slow)
+    - [x] Default to Checklist only; keep deterministic rules always active.
+    - [x] Instrument per‑alert explanation latency and display it in the UI when LLM output is used.
   - [ ] **12.5 LLM settings UI**
-    - [ ] Add model selector (default `aadide/medgemma-1.5-4b-it-Q4_K_S`), with a "Custom" input; respect `OLLAMA_MODEL` env override and show a notice when active.
-    - [ ] Add `num_ctx` selector (e.g., 2048/4096/8192) and pass to Ollama `options` alongside `num_predict`.
+    - [x] Add model selector (default `aadide/medgemma-1.5-4b-it-Q4_K_S`), with a "Custom" input; respect `OLLAMA_MODEL` env override and show a notice when active.
+    - [x] Add `num_ctx` selector (e.g., 2048/4096/8192) and pass to Ollama `options` alongside `num_predict`.
   - [ ] **12.6 Performance & GPU guidance (dev notes)**
     - [ ] Keep RAG `top_k` small and excerpt truncation in prompts.
     - [ ] Cap `num_predict` (e.g., 256) and prefer a single LLM call per Save.
@@ -270,6 +272,8 @@ MegGemma Kaggle Project 2026/
  - [ ] A DDI scenario surfaces a `ddi` issue with a guideline reference and a nudge only if not already in clinician’s plan.
  - [ ] A missed prior plan (e.g., “recheck Cr next visit”) is detected and nudged if not executed.
  - [ ] Switching LLM modes changes the number of LLM calls per Save accordingly (Checklist: 1, Synthesis: 1, Per‑alert: N).
+  - [ ] Per‑alert explanations include at least one quoted excerpt with (page, chunk_id) when retrieval is non-empty, or show an appended “Citations” fallback.
+  - [ ] Per‑alert explanations display LLM time (seconds) when LLM output is used.
 
 ## 5. Notes / Open Questions
 

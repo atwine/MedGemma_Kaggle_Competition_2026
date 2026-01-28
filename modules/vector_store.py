@@ -119,12 +119,21 @@ class ChromaVectorStore(VectorStore):
                 ]
             }
 
-        result = self._collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            include=["metadatas", "documents", "distances"],
-            where=where,
-        )
+        try:
+            result = self._collection.query(
+                query_embeddings=[query_embedding],
+                n_results=top_k,
+                include=["metadatas", "documents", "distances"],
+                where=where,
+            )
+        except Exception:
+            # Some Chroma versions reject combined operators in filters; retry without filter
+            # and let the caller enforce page_range bounds post‑retrieval.
+            result = self._collection.query(
+                query_embeddings=[query_embedding],
+                n_results=top_k,
+                include=["metadatas", "documents", "distances"],
+            )
 
         ids = (result.get("ids") or [[]])[0]
         documents = (result.get("documents") or [[]])[0]

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -20,11 +21,14 @@ from modules.explanation_generator import (
     ExplanationResult,
     generate_audit_checklist_alerts,
     generate_explanation,
+    generate_stage3_synthesis_issues,
 )
 from modules.llm_client import OllamaClient, OllamaConfig
 from modules.patient_parser import build_patient_context, load_mock_patients
 from modules.rag_engine import RagEngine
 from modules.vector_store import VectorSearchResult, create_vector_store
+from modules.stage1_summary import build_stage1_summary
+from modules.stage3_narrative import generate_stage3_narrative
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -50,7 +54,7 @@ def _load_patients(path: str) -> List[Dict[str, Any]]:
  
  
 @st.cache_resource
-def _get_embedder(model_name: str) -> Embedder:
+def _get_embedder(model_name: str, *, version: int = 2) -> Embedder:
     # Rationale: embedding model load is expensive; cache the instance.
     return Embedder(EmbedderConfig(model_name=model_name))
 
@@ -63,7 +67,7 @@ def _get_rag_engine(
     engine_version: int = 3,
 ) -> RagEngine:
     # Rationale: keep a single vector store + embedder + engine per session.
-    embedder = _get_embedder(embedding_model_name)
+    embedder = _get_embedder(embedding_model_name, version=2)
     # Rationale: keep a separate Chroma collection per embedding model to avoid
     # mixing incompatible vector spaces across runs.
     model_key = (
@@ -149,6 +153,7 @@ def _run_analysis(
     llm_mode: str,
     ollama_model: Optional[str],
     ollama_num_ctx: Optional[int],
+    show_llm_narrative: bool,
 ) -> None:
     # Rationale: keep analysis deterministic for alert triggering, and only use the
     # LLM for explanation/citation if available.
@@ -159,12 +164,14 @@ def _run_analysis(
 
     context = build_patient_context(patient_copy)
     alerts = run_alerts(context)
+    # Preserve Stage 1 deterministic alerts for Stage 3 synthesis input.
+    deterministic_alerts = list(alerts)
 
     rag = _get_rag_engine(
         prefer_chroma=prefer_chroma,
         embedding_model_name=embedding_model_name,
-        # Rationale: cache-bust to refresh class definition after code change (Stage 2 API).
-        engine_version=3,
+        # Rationale: cache-bust to refresh vector_store Chroma filter fix and related changes.
+        engine_version=4,
     )
 
     # Rationale: indexing can be expensive; we allow limiting pages for a faster demo.
@@ -216,8 +223,9 @@ def _run_analysis(
     if ollama_status is not None:
         # Rationale: the first LLM call is a good proxy for "Ollama connected".
         ollama_status.update(label="Ollama: generating audit checklist…", state="running")
-    # Manage LLM calls by mode: checklist vs per‑alert explanations.
-    checklist_llm = llm_client if (use_ollama and llm_mode in ["Checklist only", "Synthesis"]) else None
+    # Manage LLM calls by mode: checklist vs per‑alert explanations vs synthesis.
+    # In Synthesis mode, skip the checklist LLM to keep a single LLM call later.
+    checklist_llm = llm_client if (use_ollama and llm_mode == "Checklist only") else None
     explanation_llm = llm_client if (use_ollama and llm_mode == "Per-alert explanations") else None
 
     if ollama_status is not None and checklist_llm is not None:
@@ -246,6 +254,9 @@ def _run_analysis(
         st.session_state[f"alert_override_comment_{alert.alert_id}"] = ""
 
     results: List[Dict[str, Any]] = []
+    # Evidence map for Stage 3 synthesis (per deterministic alert).
+    evidence_map: Dict[str, List[VectorSearchResult]] = {}
+
     for alert in alerts:
         if (alert.evidence or {}).get("type") == "llm_audit_checklist":
             # Rationale: checklist alerts already contain LLM-produced guidance and
@@ -279,18 +290,25 @@ def _run_analysis(
                     if (r.metadata.get("page_number") is not None and int(r.metadata.get("page_number")) >= int(lo) and int(r.metadata.get("page_number")) <= int(hi))
                 ]
 
+            # Capture evidence for Stage 3 only for deterministic (non-LLM) alerts.
+            evidence_map[alert.alert_id] = list(retrieved)
+
             if ollama_status is not None and explanation_llm is not None:
                 # Rationale: per-alert LLM calls may each take time; show which step is active.
                 ollama_status.update(
                     label=f"Ollama: generating explanation for '{alert.title}'…",
                     state="running",
                 )
+            # Rationale: measure per‑alert LLM explanation time to track latency and surface it in the UI.
+            _t0 = time.perf_counter()
             explanation = generate_explanation(
                 patient_context=context,
                 alert=alert,
                 retrieved_chunks=retrieved,
                 llm_client=explanation_llm,
             )
+            _t1 = time.perf_counter()
+            st.session_state[f"explain_time_{alert.alert_id}"] = max(0.0, float(_t1 - _t0))
 
             if ollama_status is not None and explanation_llm is not None:
                 last_err = explanation_llm.last_error if explanation_llm is not None else None
@@ -314,12 +332,81 @@ def _run_analysis(
             }
         )
 
+    # Optional: generate a clinician-facing narrative (Subjective/Objective/Assessment/Plan) via LLM.
+    if show_llm_narrative and use_ollama and llm_client is not None:
+        if ollama_status is not None:
+            ollama_status.update(label="Ollama: generating clinical summary…", state="running")
+        try:
+            stage1_summary = build_stage1_summary(patient=patient_copy, context=context)
+            narrative_json = generate_stage3_narrative(
+                patient_context=context,
+                stage1_summary=stage1_summary,
+                evidence_map=evidence_map,
+                llm_client=llm_client,
+            )
+        except Exception:
+            narrative_json = None
+        st.session_state["analysis_narrative"] = narrative_json
+        if ollama_status is not None:
+            last_err = llm_client.last_error
+            if last_err:
+                ollama_status.update(label=f"Ollama error: {last_err}", state="error")
+            else:
+                ollama_status.update(label="Ollama connected (response received)", state="complete")
+        if ollama_error is None:
+            ollama_error = llm_client.last_error
+    else:
+        # Clear any prior narrative to avoid stale display when toggle is off.
+        st.session_state["analysis_narrative"] = None
+
+    # Stage 3 synthesis: single LLM call producing structured issues as new Alerts.
+    if use_ollama and llm_mode == "Synthesis" and llm_client is not None:
+        if ollama_status is not None:
+            ollama_status.update(label="Ollama: generating synthesis issues…", state="running")
+        try:
+            synth_alerts = generate_stage3_synthesis_issues(
+                patient_context=context,
+                deterministic_alerts=deterministic_alerts,
+                evidence_map=evidence_map,
+                llm_client=llm_client,
+            )
+        except Exception:
+            synth_alerts = []
+        # Initialize gating state for new synthesis alerts and append to results.
+        if synth_alerts:
+            for a in synth_alerts:
+                st.session_state[f"alert_action_{a.alert_id}"] = "Unreviewed"
+                st.session_state[f"alert_override_reason_{a.alert_id}"] = ""
+                st.session_state[f"alert_override_comment_{a.alert_id}"] = ""
+                results.append(
+                    {
+                        "alert": a,
+                        "retrieved": [],
+                        "explanation": ExplanationResult(text=a.message, used_chunks=[], used_llm=False),
+                    }
+                )
+            alerts = list(alerts) + synth_alerts
+
+        if ollama_status is not None:
+            last_err = llm_client.last_error
+            if last_err:
+                ollama_status.update(label=f"Ollama error: {last_err}", state="error")
+            else:
+                ollama_status.update(label="Ollama connected (response received)", state="complete")
+        # Capture first error if no LLM text returned.
+        if ollama_error is None:
+            ollama_error = llm_client.last_error
+
     st.session_state["analysis_ran"] = True
     st.session_state["finalized"] = False
     st.session_state["analysis_alerts"] = alerts
     st.session_state["analysis_results"] = results
     st.session_state["analysis_status"] = _compute_overall_status(alerts)
     st.session_state["analysis_use_ollama"] = bool(use_ollama)
+    # UX: surface active retrieval page range in Results view (caption) for reviewers.
+    st.session_state["analysis_retrieval_page_range"] = retrieval_page_range
+    # Remember if the user asked for the clinical summary (LLM) so we can render its expander.
+    st.session_state["analysis_show_llm_narrative"] = bool(show_llm_narrative)
     _client_used = (checklist_llm or explanation_llm)
     st.session_state["analysis_ollama_model"] = _client_used.model if _client_used is not None else None
     st.session_state["analysis_ollama_error"] = ollama_error
@@ -592,6 +679,12 @@ def main() -> None:
         if env_model:
             st.caption(f"OLLAMA_MODEL is set: {env_model} (UI model selection will be ignored)")
         num_ctx = st.selectbox("Context window (num_ctx)", [2048, 4096, 8192], index=1)
+        show_llm_narrative = st.checkbox(
+            "Show clinical summary (LLM)",
+            value=False,
+            help="Render Subjective/Objective/Assessment/Plan from LLM as a read-only supplement.",
+            disabled=not use_ollama,
+        )
 
     save_disabled = not bool(GUIDELINE_PDF_PATHS)
     if st.button("Save encounter (run checks)", disabled=save_disabled):
@@ -607,6 +700,7 @@ def main() -> None:
             llm_mode=llm_mode,
             ollama_model=ollama_model_ui,
             ollama_num_ctx=int(num_ctx),
+            show_llm_narrative=bool(show_llm_narrative),
         )
 
     st.subheader("Results")
@@ -621,6 +715,24 @@ def main() -> None:
         st.success("GREEN: No alerts detected.")
     else:
         st.warning(f"YELLOW: {len(alerts)} alert(s) to consider.")
+
+    # UX: Show the active retrieval page range to make bounds explicit for reviewers.
+    _active_range = st.session_state.get("analysis_retrieval_page_range")
+    if _active_range is None:
+        st.caption("Retrieval page range: All pages")
+    else:
+        lo, hi = _active_range
+        st.caption(f"Retrieval page range: pages {lo}–{hi}")
+
+    # Optional: display LLM-generated clinical summary expander based on the toggle.
+    _narr = st.session_state.get("analysis_narrative")
+    _want_narr = st.session_state.get("analysis_show_llm_narrative")
+    if _want_narr:
+        with st.expander("Clinical Summary (LLM)", expanded=False):
+            if isinstance(_narr, dict) and _narr:
+                st.json(_narr)
+            else:
+                st.caption("No clinical summary available. Ensure 'Use Ollama' is on and try again.")
 
     if alerts:
         for item in st.session_state.get("analysis_results", []):
@@ -642,8 +754,16 @@ def main() -> None:
                     st.write("No guideline chunks retrieved.")
 
                 st.markdown("**Why this alert?**")
-                if explanation.used_llm:
+                _is_checklist = (alert.evidence or {}).get("type") == "llm_audit_checklist"
+                if _is_checklist:
+                    # UX: checklist items are generated via a single LLM call; per‑alert explanations are skipped.
+                    st.caption("Checklist item generated by LLM (single-call mode). Per‑alert explanation is disabled in this mode.")
+                elif explanation.used_llm:
                     st.caption("Generated with local LLM (Ollama) using retrieved excerpts.")
+                    # Rationale: show latency for per‑alert explanations when LLM was used.
+                    _elapsed = st.session_state.get(f"explain_time_{alert.alert_id}")
+                    if isinstance(_elapsed, (int, float)):
+                        st.caption(f"LLM time: {_elapsed:.2f}s")
                 else:
                     if st.session_state.get("analysis_use_ollama"):
                         st.caption("Deterministic fallback explanation (LLM unavailable).")
