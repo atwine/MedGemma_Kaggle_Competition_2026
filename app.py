@@ -12,6 +12,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import datetime
 
 import streamlit as st
 
@@ -29,6 +30,7 @@ from modules.rag_engine import RagEngine
 from modules.vector_store import VectorSearchResult, create_vector_store
 from modules.stage1_summary import build_stage1_summary
 from modules.stage3_narrative import generate_stage3_narrative
+from modules.llm_screening import generate_llm_screening_alerts
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -48,8 +50,9 @@ MOCK_PATIENTS_PATH = PROJECT_ROOT / "Data" / "mock_patients.json"
 
 
 @st.cache_data
-def _load_patients(path: str) -> List[Dict[str, Any]]:
+def _load_patients(path: str, *, version: int = 1) -> List[Dict[str, Any]]:
     # Rationale: cache synthetic demo data across reruns for responsiveness.
+    # The version parameter allows cache-busting when the JSON file changes.
     return load_mock_patients(Path(path))
  
  
@@ -166,6 +169,8 @@ def _run_analysis(
     alerts = run_alerts(context)
     # Preserve Stage 1 deterministic alerts for Stage 3 synthesis input.
     deterministic_alerts = list(alerts)
+    # Build Stage 1 summary once so it can be reused by LLM screening and narrative.
+    stage1_summary = build_stage1_summary(patient=patient_copy, context=context)
 
     rag = _get_rag_engine(
         prefer_chroma=prefer_chroma,
@@ -223,27 +228,55 @@ def _run_analysis(
     if ollama_status is not None:
         # Rationale: the first LLM call is a good proxy for "Ollama connected".
         ollama_status.update(label="Ollama: generating audit checklist…", state="running")
-    # Manage LLM calls by mode: checklist vs per‑alert explanations vs synthesis.
+    # Manage LLM calls by mode: checklist vs per‑alert explanations vs synthesis vs screening.
     # In Synthesis mode, skip the checklist LLM to keep a single LLM call later.
     checklist_llm = llm_client if (use_ollama and llm_mode == "Checklist only") else None
     explanation_llm = llm_client if (use_ollama and llm_mode == "Per-alert explanations") else None
 
-    if ollama_status is not None and checklist_llm is not None:
-        ollama_status.update(label="Ollama: generating audit checklist…", state="running")
-    checklist_alerts = generate_audit_checklist_alerts(
-        patient_context=context,
-        retrieved_chunks=checklist_retrieved,
-        llm_client=checklist_llm,
-    )
+    checklist_alerts: List[Alert] = []
+    if llm_mode == "Checklist only":
+        if ollama_status is not None and checklist_llm is not None:
+            ollama_status.update(label="Ollama: generating audit checklist…", state="running")
+        checklist_alerts = generate_audit_checklist_alerts(
+            patient_context=context,
+            retrieved_chunks=checklist_retrieved,
+            llm_client=checklist_llm,
+        )
 
-    if ollama_status is not None and checklist_llm is not None:
-        last_err = checklist_llm.last_error if checklist_llm is not None else None
-        if last_err:
-            ollama_status.update(label=f"Ollama error: {last_err}", state="error")
-        else:
-            ollama_status.update(label="Ollama connected (response received)", state="complete")
-    if checklist_alerts:
-        alerts = list(alerts) + checklist_alerts
+        if ollama_status is not None and checklist_llm is not None:
+            last_err = checklist_llm.last_error if checklist_llm is not None else None
+            if last_err:
+                ollama_status.update(label=f"Ollama error: {last_err}", state="error")
+            else:
+                ollama_status.update(label="Ollama connected (response received)", state="complete")
+        if checklist_alerts:
+            alerts = list(alerts) + checklist_alerts
+
+    # Optional: LLM-first screening mode — generate alerts directly from Stage 1 summary
+    # and checklist evidence, even if deterministic rules are silent.
+    if (
+        use_ollama
+        and llm_mode == "LLM screening (generate alerts)"
+        and llm_client is not None
+    ):
+        if ollama_status is not None:
+            ollama_status.update(label="Ollama: screening for safety issues…", state="running")
+        screening_alerts = generate_llm_screening_alerts(
+            patient_context=context,
+            stage1_summary=stage1_summary,
+            screening_chunks=checklist_retrieved,
+            llm_client=llm_client,
+        )
+        alerts = list(screening_alerts)
+        deterministic_alerts = []
+        if ollama_status is not None:
+            last_err = llm_client.last_error
+            if last_err:
+                ollama_status.update(label=f"Ollama error: {last_err}", state="error")
+            else:
+                ollama_status.update(label="Ollama connected (response received)", state="complete")
+        if ollama_error is None:
+            ollama_error = llm_client.last_error
 
     # Rationale: reset per-alert review state for each analysis run. Without this,
     # a previous acknowledgment/override can incorrectly allow finalize on a new
@@ -332,32 +365,8 @@ def _run_analysis(
             }
         )
 
-    # Optional: generate a clinician-facing narrative (Subjective/Objective/Assessment/Plan) via LLM.
-    if show_llm_narrative and use_ollama and llm_client is not None:
-        if ollama_status is not None:
-            ollama_status.update(label="Ollama: generating clinical summary…", state="running")
-        try:
-            stage1_summary = build_stage1_summary(patient=patient_copy, context=context)
-            narrative_json = generate_stage3_narrative(
-                patient_context=context,
-                stage1_summary=stage1_summary,
-                evidence_map=evidence_map,
-                llm_client=llm_client,
-            )
-        except Exception:
-            narrative_json = None
-        st.session_state["analysis_narrative"] = narrative_json
-        if ollama_status is not None:
-            last_err = llm_client.last_error
-            if last_err:
-                ollama_status.update(label=f"Ollama error: {last_err}", state="error")
-            else:
-                ollama_status.update(label="Ollama connected (response received)", state="complete")
-        if ollama_error is None:
-            ollama_error = llm_client.last_error
-    else:
-        # Clear any prior narrative to avoid stale display when toggle is off.
-        st.session_state["analysis_narrative"] = None
+    # Clinical summary (LLM) feature disabled: always clear any prior narrative.
+    st.session_state["analysis_narrative"] = None
 
     # Stage 3 synthesis: single LLM call producing structured issues as new Alerts.
     if use_ollama and llm_mode == "Synthesis" and llm_client is not None:
@@ -403,10 +412,9 @@ def _run_analysis(
     st.session_state["analysis_results"] = results
     st.session_state["analysis_status"] = _compute_overall_status(alerts)
     st.session_state["analysis_use_ollama"] = bool(use_ollama)
+    st.session_state["analysis_llm_mode"] = llm_mode
     # UX: surface active retrieval page range in Results view (caption) for reviewers.
     st.session_state["analysis_retrieval_page_range"] = retrieval_page_range
-    # Remember if the user asked for the clinical summary (LLM) so we can render its expander.
-    st.session_state["analysis_show_llm_narrative"] = bool(show_llm_narrative)
     _client_used = (checklist_llm or explanation_llm)
     st.session_state["analysis_ollama_model"] = _client_used.model if _client_used is not None else None
     st.session_state["analysis_ollama_error"] = ollama_error
@@ -436,7 +444,8 @@ def main() -> None:
         st.error("Mock patients file not found: `Data/mock_patients.json`")
         return
 
-    patients = _load_patients(str(MOCK_PATIENTS_PATH))
+    # Cache-bust: ensure edits to Data/mock_patients.json appear without manual cache clear.
+    patients = _load_patients(str(MOCK_PATIENTS_PATH), version=2)
     if not patients:
         st.error("No mock patients found in `Data/mock_patients.json`")
         return
@@ -449,86 +458,23 @@ def main() -> None:
         )
 
         new_patient_id = st.text_input("Patient ID", key="new_case_patient_id")
-        new_name = st.text_input("Patient display name", key="new_case_name")
-        new_regimen = st.text_input(
-            "Current ART regimen (comma-separated, e.g., TDF, 3TC, EFV)",
-            key="new_case_regimen",
-        )
-        new_encounter_date = st.date_input("Encounter date", key="new_case_encounter_date")
 
-        st.caption("Optional: add one previous clinician note")
-        new_prev_note = st.text_area("Previous clinician note", key="new_case_prev_note", height=80)
-
-        st.caption("Optional: add labs")
-        st.session_state.setdefault("new_case_labs", [])
-
-        lab_key_map = {
-            "Viral load": "viral_load",
-            "CD4 count": "cd4",
-            "Hemoglobin": "hemoglobin",
-            "Serum creatinine": "creatinine",
-            "Serum phosphate": "phosphate",
-            "Urinalysis": "urinalysis",
-            "Random blood sugar": "random_blood_sugar",
-        }
-
-        lab_options = list(lab_key_map.keys()) + ["Other"]
-        lab_col1, lab_col2 = st.columns(2)
-        with lab_col1:
-            selected_lab = st.selectbox("Lab test", lab_options, key="new_case_lab_test")
-            selected_lab_date = st.date_input("Lab date", key="new_case_lab_date")
-        with lab_col2:
-            other_lab_name = ""
-            if selected_lab == "Other":
-                other_lab_name = st.text_input("Lab name", key="new_case_other_lab_name")
-
-            if selected_lab == "Urinalysis":
-                selected_lab_value = st.text_area(
-                    "Result",
-                    key="new_case_lab_value_text",
-                    height=80,
-                )
-            else:
-                selected_lab_value = st.text_input("Result", key="new_case_lab_value")
-
-        if st.button("Add lab result"):
-            lab_value = (selected_lab_value or "").strip()
-            if not lab_value:
-                st.error("Lab result is required.")
-            elif selected_lab == "Other" and not (other_lab_name or "").strip():
-                st.error("Lab name is required for 'Other'.")
-            else:
-                st.session_state["new_case_labs"] = list(st.session_state.get("new_case_labs") or []) + [
-                    {
-                        "lab": selected_lab,
-                        "date": selected_lab_date.isoformat(),
-                        "value": lab_value,
-                        "other_name": (other_lab_name or "").strip(),
-                    }
-                ]
-
-        if st.session_state.get("new_case_labs"):
-            st.caption("Added lab results")
-            st.json(st.session_state.get("new_case_labs"))
-            if st.button("Clear added labs"):
-                st.session_state["new_case_labs"] = []
+        st.caption("Optional: enter patient history, including any prior labs and events.")
+        new_prev_note = st.text_area("Patient History", key="new_case_prev_note", height=80)
 
         if st.button("Add case to patient list"):
             pid = (new_patient_id or "").strip()
-            name = (new_name or "").strip()
-            regimen_items = [r.strip() for r in (new_regimen or "").split(",") if r.strip()]
-
-            if not pid or not name or not regimen_items:
-                st.error("Patient ID, display name, and regimen are required.")
+            if not pid:
+                st.error("Patient ID is required.")
             elif any((p.get("patient_id") == pid) for p in (list(patients) + custom_patients)):
                 st.error("That Patient ID already exists in the current patient list.")
             else:
-                encounter_iso = new_encounter_date.isoformat()
+                encounter_iso = datetime.date.today().isoformat()
 
                 patient_record: Dict[str, Any] = {
                     "patient_id": pid,
-                    "name": name,
-                    "art_regimen_current": regimen_items,
+                    "name": pid,
+                    "art_regimen_current": [],
                     "visits": [],
                     "labs": {},
                     "today_encounter": {
@@ -552,52 +498,13 @@ def main() -> None:
                         }
                     )
 
-                # Rationale: allow arbitrary lab entry; preserve existing keys for
-                # viral_load/creatinine so current rules continue to work.
-                for entry in list(st.session_state.get("new_case_labs") or []):
-                    lab_label = str(entry.get("lab") or "").strip()
-                    date_iso = str(entry.get("date") or "").strip()
-                    raw_value = str(entry.get("value") or "").strip()
-
-                    if not lab_label or not date_iso or not raw_value:
-                        continue
-
-                    if lab_label == "Other":
-                        lab_key = (entry.get("other_name") or "").strip().lower().replace(" ", "_")
-                        if not lab_key:
-                            continue
-                    else:
-                        lab_key = lab_key_map.get(lab_label)
-                        if not lab_key:
-                            continue
-
-                    patient_record["labs"].setdefault(lab_key, [])
-
-                    if lab_key == "viral_load":
-                        try:
-                            patient_record["labs"][lab_key].append(
-                                {"date": date_iso, "value_copies_per_ml": int(float(raw_value))}
-                            )
-                        except Exception:
-                            patient_record["labs"][lab_key].append({"date": date_iso, "value": raw_value})
-                    elif lab_key == "creatinine":
-                        try:
-                            patient_record["labs"][lab_key].append(
-                                {"date": date_iso, "value_umol_per_l": float(raw_value)}
-                            )
-                        except Exception:
-                            patient_record["labs"][lab_key].append({"date": date_iso, "value": raw_value})
-                    else:
-                        patient_record["labs"][lab_key].append({"date": date_iso, "value": raw_value})
-
                 # Rationale: keep the local list in sync so the newly added patient
                 # appears in the list immediately on this rerun.
                 custom_patients = custom_patients + [patient_record]
                 st.session_state["custom_patients"] = custom_patients
-                st.session_state["new_case_labs"] = []
                 # Rationale: auto-select the newly added patient to make it clear
                 # the add succeeded.
-                st.session_state["selected_patient_label"] = f"{pid} - {name}"
+                st.session_state["selected_patient_label"] = f"{pid} - {patient_record['name']}"
                 st.success("Case added. Select it from the patient list below.")
 
     if custom_patients:
@@ -666,7 +573,12 @@ def main() -> None:
         use_ollama = st.checkbox("Use Ollama for explanations (if available)", value=True)
         llm_mode = st.selectbox(
             "LLM mode",
-            ["Checklist only", "Synthesis", "Per-alert explanations"],
+            [
+                "Checklist only",
+                "Synthesis",
+                "Per-alert explanations",
+                "LLM screening (generate alerts)",
+            ],
             index=0,
         )
         env_model = (os.getenv("OLLAMA_MODEL") or "").strip()
@@ -678,13 +590,7 @@ def main() -> None:
             ollama_model_ui = model_options[0]
         if env_model:
             st.caption(f"OLLAMA_MODEL is set: {env_model} (UI model selection will be ignored)")
-        num_ctx = st.selectbox("Context window (num_ctx)", [2048, 4096, 8192], index=1)
-        show_llm_narrative = st.checkbox(
-            "Show clinical summary (LLM)",
-            value=False,
-            help="Render Subjective/Objective/Assessment/Plan from LLM as a read-only supplement.",
-            disabled=not use_ollama,
-        )
+        num_ctx = st.selectbox("Context window (num_ctx)", [2048, 4096, 8192], index=2)
 
     save_disabled = not bool(GUIDELINE_PDF_PATHS)
     if st.button("Save encounter (run checks)", disabled=save_disabled):
@@ -700,7 +606,7 @@ def main() -> None:
             llm_mode=llm_mode,
             ollama_model=ollama_model_ui,
             ollama_num_ctx=int(num_ctx),
-            show_llm_narrative=bool(show_llm_narrative),
+            show_llm_narrative=False,
         )
 
     st.subheader("Results")
@@ -713,6 +619,36 @@ def main() -> None:
 
     if status == "GREEN":
         st.success("GREEN: No alerts detected.")
+        _mode = st.session_state.get("analysis_llm_mode")
+        _use_ollama = st.session_state.get("analysis_use_ollama")
+        _ollama_err = st.session_state.get("analysis_ollama_error")
+        _active_range = st.session_state.get("analysis_retrieval_page_range")
+        if _active_range is None:
+            _range_text = "all available guideline pages"
+        else:
+            lo, hi = _active_range
+            _range_text = f"guideline pages {lo}–{hi}"
+
+        if _mode == "LLM screening (generate alerts)" and _use_ollama and not _ollama_err:
+            st.markdown(
+                "No alerts were generated because the LLM screening step reviewed the Stage 1 patient "
+                f"summary together with guideline excerpts from {_range_text} and did not find any "
+                "guideline-based safety issues that met its alert thresholds (for example, severe anemia "
+                "on zidovudine/AZT, ART toxicities, missing or overdue safety labs, or missing guideline-"
+                "recommended monitoring)."
+            )
+        elif _mode == "LLM screening (generate alerts)" and _use_ollama and _ollama_err:
+            st.markdown(
+                "No alerts were generated. Deterministic rule-based checks did not trigger any alerts. "
+                "LLM screening was configured but the Ollama call failed, so it could not contribute "
+                "additional alerts."
+            )
+            st.caption(f"Ollama debug: {_ollama_err}")
+        else:
+            st.markdown(
+                "No alerts were generated because the deterministic rule-based checks evaluated the "
+                "structured patient context and none of the configured rules were triggered."
+            )
     else:
         st.warning(f"YELLOW: {len(alerts)} alert(s) to consider.")
 
@@ -723,16 +659,6 @@ def main() -> None:
     else:
         lo, hi = _active_range
         st.caption(f"Retrieval page range: pages {lo}–{hi}")
-
-    # Optional: display LLM-generated clinical summary expander based on the toggle.
-    _narr = st.session_state.get("analysis_narrative")
-    _want_narr = st.session_state.get("analysis_show_llm_narrative")
-    if _want_narr:
-        with st.expander("Clinical Summary (LLM)", expanded=False):
-            if isinstance(_narr, dict) and _narr:
-                st.json(_narr)
-            else:
-                st.caption("No clinical summary available. Ensure 'Use Ollama' is on and try again.")
 
     if alerts:
         for item in st.session_state.get("analysis_results", []):
