@@ -53,7 +53,9 @@ def _parse_issues_json(text: str) -> Optional[List[Dict[str, Any]]]:
     for item in parsed:
         if isinstance(item, dict):
             out.append(item)
-    return out or None
+    # Rationale: distinguish between a valid empty array [] (return []) and a parse failure
+    # (return None). Caller uses this to provide a clinician-visible audit trail.
+    return out
 
 
 def generate_llm_screening_alerts(
@@ -62,11 +64,55 @@ def generate_llm_screening_alerts(
     stage1_summary: Dict[str, Any],
     screening_chunks: List[VectorSearchResult],
     llm_client: Optional[OllamaClient],
+    debug: Optional[Dict[str, Any]] = None,
 ) -> List[Alert]:
     if llm_client is None:
+        if debug is not None:
+            # Rationale: enable the UI to explain that screening could not run.
+            debug["parse_status"] = "llm_unavailable"
         return []
 
     bundle = _build_screening_bundle(screening_chunks)
+
+    # Rationale: enforce valid JSON output to avoid parse failures in the UI.
+    # Ollama supports structured outputs via the `format` parameter (json or JSON schema). [src]
+    # - https://raw.githubusercontent.com/ollama/ollama/main/docs/api.md
+    output_schema: Dict[str, Any] = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "alert_id": {"type": "string"},
+                "title": {"type": "string"},
+                "message": {"type": "string"},
+                "issue_type": {"type": "string"},
+                "severity": {"type": "string"},
+                "recommended_action": {"type": "string"},
+                "citations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "page_number": {"type": "integer"},
+                            "chunk_id": {"type": "string"},
+                        },
+                        "required": ["page_number", "chunk_id"],
+                        "additionalProperties": True,
+                    },
+                },
+            },
+            "required": [
+                "alert_id",
+                "title",
+                "message",
+                "issue_type",
+                "severity",
+                "recommended_action",
+                "citations",
+            ],
+            "additionalProperties": True,
+        },
+    }
 
     # system: ChatMessage = {
     #     "role": "system",
@@ -139,7 +185,18 @@ def generate_llm_screening_alerts(
         - **low**: Guidelines suggest optimization or best practice without safety concern
 
         ## OUTPUT FORMAT
-        Return ONLY a valid JSON array. Empty array [] only if NO guideline rules are violated.
+        
+        Return ONLY a valid JSON array.
+ 
+        - If a guideline-supported issue exists in the provided excerpts: output it with citations.
+        - If patient facts suggest a potentially important issue but the provided excerpts do NOT contain a supporting rule:
+        output an item with issue_type="information_gap", citations=[], and clearly state
+        "Not supported by provided excerpts; needs more guideline retrieval."
+        - Output [] only if:
+        (a) no guideline-supported issues are found AND
+        (b) no information gaps / potential concerns requiring more guideline evidence are present.
+        Never invent citations.
+
         ```json
         [
         {
@@ -173,7 +230,7 @@ def generate_llm_screening_alerts(
 
         Remember: Your job is to be a careful reader of guidelines and a systematic checker of patient data against those guidelines. The guidelines are your source of truth."""
         ),
-        }
+    }
     
 
     user: ChatMessage = {
@@ -191,10 +248,35 @@ def generate_llm_screening_alerts(
         ),
     }
 
-    llm_text = llm_client.chat([system, user])
+    # Rationale: increase num_predict so the model is less likely to truncate a long JSON array.
+    # Keep a safe fallback for clients/tests that don't accept the structured-output kwargs.
+    try:
+        llm_text = llm_client.chat(
+            [system, user],
+            format=output_schema,
+            options_override={"num_predict": 768},
+        )
+    except TypeError:
+        llm_text = llm_client.chat([system, user])
+    if debug is not None:
+        # Rationale: persist the exact inputs/outputs used for screening so GREEN results
+        # can explain what was checked and whether parsing succeeded.
+        debug["raw_output"] = llm_text
+        debug["screening_bundle"] = bundle
+
     issues = _parse_issues_json(llm_text or "")
-    if not issues:
+    if issues is None:
+        if debug is not None:
+            debug["parse_status"] = "parse_failed"
         return []
+
+    if len(issues) == 0:
+        if debug is not None:
+            debug["parse_status"] = "parsed_empty"
+        return []
+
+    if debug is not None:
+        debug["parse_status"] = "parsed_nonempty"
 
     alerts: List[Alert] = []
     for idx, issue in enumerate(issues):

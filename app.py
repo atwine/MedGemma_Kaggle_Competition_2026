@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -113,8 +114,92 @@ def _init_session_state() -> None:
     st.session_state.setdefault("analysis_use_ollama", False)
     st.session_state.setdefault("analysis_ollama_model", None)
     st.session_state.setdefault("analysis_ollama_error", None)
+    # Rationale: allow audit/debug display for LLM screening when no alerts are returned.
+    st.session_state.setdefault("analysis_screening_debug", None)
+    st.session_state.setdefault("analysis_screening_patient_facts", None)
     # Rationale: allow adding ad-hoc test cases without editing JSON files.
     st.session_state.setdefault("custom_patients", [])
+
+
+def _extract_patient_facts_from_history(notes_text: str) -> Dict[str, Any]:
+    # Rationale: deterministic, lightweight extraction so clinicians can see what the system
+    # believes is present in the free-text history even when no alerts are generated.
+    text = (notes_text or "").strip()
+    low = text.lower()
+
+    # Rationale: match common ART abbreviations and full names to reduce false "empty" fact extraction.
+    # This does not change alert logic; it only improves audit transparency.
+    arv_terms = {
+        "tdf": "TDF",
+        "tenofovir": "TDF",
+        "3tc": "3TC",
+        "lamivudine": "3TC",
+        "dtg": "DTG",
+        "dolutegravir": "DTG",
+        "azt": "AZT",
+        "zidovudine": "AZT",
+        "ftc": "FTC",
+        "emtricitabine": "FTC",
+        "efv": "EFV",
+        "efavirenz": "EFV",
+        "nvp": "NVP",
+        "nevirapine": "NVP",
+        "d4t": "D4T",
+        "stavudine": "D4T",
+        "abc": "ABC",
+        "abacavir": "ABC",
+        "taf": "TAF",
+    }
+    meds_norm = set()
+    for term, canon in arv_terms.items():
+        if re.search(rf"\b{re.escape(term)}\b", low):
+            meds_norm.add(canon)
+    meds_found = sorted(meds_norm)
+
+    symptom_terms = [
+        "bone pain",
+        "fracture",
+        "difficulty walking",
+        "proximal muscle weakness",
+        "weakness",
+        "fatigue",
+        "dizziness",
+    ]
+    symptoms_found = [t for t in symptom_terms if t in low]
+
+    key_line_terms = [
+        "current art",
+        "viral load",
+        "cd4",
+        "serum creatinine",
+        "creatinine",
+        "egfr",
+        "urinalysis",
+        "phosphate",
+        "alp",
+        "vitamin d",
+        "dexa",
+        "t-score",
+        "looser",
+    ]
+    key_lines: List[str] = []
+    for ln in (text.splitlines() or []):
+        s = ln.strip()
+        if not s:
+            continue
+        sl = s.lower()
+        if any(term in sl for term in key_line_terms):
+            key_lines.append(s)
+
+    # Bound the output so it remains readable in the UI.
+    return {
+        # Rationale: include minimal diagnostics so a clinician can confirm what text was actually checked.
+        "notes_text_char_count": len(text),
+        "notes_text_preview": (text[:300] + ("…" if len(text) > 300 else "")),
+        "medications_detected": meds_found,
+        "symptoms_detected": symptoms_found,
+        "key_history_lines": key_lines[:25],
+    }
 
 
 def _compute_overall_status(alerts: List[Alert]) -> str:
@@ -176,7 +261,7 @@ def _run_analysis(
         prefer_chroma=prefer_chroma,
         embedding_model_name=embedding_model_name,
         # Rationale: cache-bust to refresh vector_store Chroma filter fix and related changes.
-        engine_version=4,
+        engine_version=5,
     )
 
     # Rationale: indexing can be expensive; we allow limiting pages for a faster demo.
@@ -261,11 +346,18 @@ def _run_analysis(
     ):
         if ollama_status is not None:
             ollama_status.update(label="Ollama: screening for safety issues…", state="running")
+        screening_debug: Dict[str, Any] = {}
         screening_alerts = generate_llm_screening_alerts(
             patient_context=context,
             stage1_summary=stage1_summary,
             screening_chunks=checklist_retrieved,
             llm_client=llm_client,
+            debug=screening_debug,
+        )
+        # Rationale: persist screening audit inputs/parse status for GREEN "no alerts" explanation.
+        st.session_state["analysis_screening_debug"] = screening_debug
+        st.session_state["analysis_screening_patient_facts"] = _extract_patient_facts_from_history(
+            context.notes_text
         )
         alerts = list(screening_alerts)
         deterministic_alerts = []
@@ -461,6 +553,13 @@ def main() -> None:
 
         st.caption("Optional: enter patient history, including any prior labs and events.")
         new_prev_note = st.text_area("Patient History", key="new_case_prev_note", height=80)
+        history_text = (new_prev_note or "").strip()
+        approx_tokens = len(history_text.split()) if history_text else 0
+        current_ctx = st.session_state.get("llm_num_ctx")
+        if current_ctx:
+            st.caption(f"Approx. history length: ~{approx_tokens} tokens vs context window {current_ctx} tokens.")
+        else:
+            st.caption(f"Approx. history length: ~{approx_tokens} tokens.")
 
         if st.button("Add case to patient list"):
             pid = (new_patient_id or "").strip()
@@ -590,7 +689,14 @@ def main() -> None:
             ollama_model_ui = model_options[0]
         if env_model:
             st.caption(f"OLLAMA_MODEL is set: {env_model} (UI model selection will be ignored)")
-        num_ctx = st.selectbox("Context window (num_ctx)", [2048, 4096, 8192], index=2)
+        num_ctx = st.number_input(
+            "Context window (num_ctx)",
+            min_value=1024,
+            max_value=131072,
+            value=8192,
+            step=1024,
+        )
+        st.session_state["llm_num_ctx"] = int(num_ctx)
 
     save_disabled = not bool(GUIDELINE_PDF_PATHS)
     if st.button("Save encounter (run checks)", disabled=save_disabled):
@@ -637,6 +743,35 @@ def main() -> None:
                 "on zidovudine/AZT, ART toxicities, missing or overdue safety labs, or missing guideline-"
                 "recommended monitoring)."
             )
+            _dbg = st.session_state.get("analysis_screening_debug") or {}
+            _facts = st.session_state.get("analysis_screening_patient_facts") or {}
+            _parse_status = _dbg.get("parse_status") or "unknown"
+            _bundle = _dbg.get("screening_bundle") or []
+            _meds = (_facts.get("medications_detected") or []) if isinstance(_facts, dict) else []
+            _symptoms = (_facts.get("symptoms_detected") or []) if isinstance(_facts, dict) else []
+            st.caption(
+                f"LLM screening audit: parse_status={_parse_status}; guideline_excerpts={len(_bundle)}; "
+                f"meds_detected={len(_meds)}; symptoms_detected={len(_symptoms)}"
+            )
+            with st.expander("No-alert audit trail (LLM screening)", expanded=True):
+                if not _dbg and not _facts:
+                    st.info(
+                        "Audit data was not captured for this run. Click Save again to re-run the analysis "
+                        "and populate the no-alert audit trail."
+                    )
+                st.markdown("**What patient facts were checked (from Patient History):**")
+                st.json(_facts)
+                st.markdown("**What guidelines were checked (retrieved excerpts):**")
+                st.json(_bundle)
+                st.markdown("**How the conclusion was reached:**")
+                st.markdown(
+                    "- The model was instructed to extract rules ONLY from the retrieved guideline excerpts.\n"
+                    "- It compared those extracted rules to the patient facts in the history and Stage 1 summary.\n"
+                    f"- LLM output status: `{_dbg.get('parse_status') or 'unknown'}`."
+                )
+                if _dbg.get("parse_status") == "parse_failed":
+                    st.error("LLM screening output could not be parsed as a JSON array; no-alert conclusion may be unreliable.")
+                    st.text(_dbg.get("raw_output") or "")
         elif _mode == "LLM screening (generate alerts)" and _use_ollama and _ollama_err:
             st.markdown(
                 "No alerts were generated. Deterministic rule-based checks did not trigger any alerts. "

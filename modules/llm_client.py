@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from typing import List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 
 
 class ChatMessage(TypedDict):
@@ -63,7 +63,13 @@ class OllamaClient:
     def last_error(self) -> Optional[str]:
         return self._last_error
 
-    def chat(self, messages: List[ChatMessage]) -> Optional[str]:
+    def chat(
+        self,
+        messages: List[ChatMessage],
+        *,
+        format: Optional[Any] = None,
+        options_override: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         """Call the local Ollama chat API.
 
         Uses the Ollama Python library interface documented on Ollama model pages.
@@ -87,18 +93,41 @@ class OllamaClient:
             # Rationale: keep outputs more deterministic for clinical UX.
             # Ollama supports passing generation parameters via `options` (e.g., temperature). [src]
             # - https://raw.githubusercontent.com/ollama/ollama/main/docs/api.md
-            chat_options = {
+            chat_options: Dict[str, Any] = {
                 "temperature": 0.3,
                 "num_predict": 256,
             }
             if self._num_ctx is not None:
                 chat_options["num_ctx"] = int(self._num_ctx)
 
-            response = client.chat(
-                model=self._model,
-                messages=messages,
-                options=chat_options,
-            )
+            if options_override:
+                # Rationale: allow per-call overrides (e.g., higher num_predict for long JSON).
+                chat_options.update(options_override)
+
+            # Rationale: Ollama supports structured outputs via the `format` parameter
+            # (either `json` or a JSON schema). [src]
+            # - https://raw.githubusercontent.com/ollama/ollama/main/docs/api.md
+            try:
+                if format is not None:
+                    response = client.chat(
+                        model=self._model,
+                        messages=messages,
+                        options=chat_options,
+                        format=format,
+                    )
+                else:
+                    response = client.chat(
+                        model=self._model,
+                        messages=messages,
+                        options=chat_options,
+                    )
+            except TypeError:
+                # Rationale: older ollama-python client versions may not accept `format`.
+                response = client.chat(
+                    model=self._model,
+                    messages=messages,
+                    options=chat_options,
+                )
             # Rationale: ollama-python supports both dict-style and object-style
             # access for responses. [src]
             # - https://raw.githubusercontent.com/ollama/ollama-python/main/README.md
