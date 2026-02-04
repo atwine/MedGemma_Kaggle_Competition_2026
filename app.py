@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import importlib
+import json
 import os
 import re
 import time
@@ -55,6 +56,7 @@ NCD_GUIDELINE_PDF_PATH = (
 # Note: for this demo we embed/index only the consolidated guideline PDF.
 GUIDELINE_PDF_PATHS = [p for p in [CONSOLIDATED_GUIDELINE_PDF_PATH] if p.exists()]
 MOCK_PATIENTS_PATH = PROJECT_ROOT / "Data" / "mock_patients.json"
+CUSTOM_PATIENTS_PATH = PROJECT_ROOT / "Data" / "custom_patients.json"
 
 
 @st.cache_data
@@ -62,6 +64,102 @@ def _load_patients(path: str, *, version: int = 1) -> List[Dict[str, Any]]:
     # Rationale: cache synthetic demo data across reruns for responsiveness.
     # The version parameter allows cache-busting when the JSON file changes.
     return load_mock_patients(Path(path))
+
+
+def _resolve_ollama_host() -> str:
+    """Resolve the Ollama host in the same way the Python client expects.
+
+    Mirrors the logic in modules.llm_client.OllamaClient to avoid surprises when
+    listing models vs running chat calls.
+    """
+
+    raw_host = (os.getenv("OLLAMA_HOST") or "").strip()
+    if not raw_host:
+        return "http://localhost:11434"
+    host = raw_host
+    if "://" not in host:
+        host = f"http://{host}"
+    host = host.replace("http://0.0.0.0", "http://localhost").replace(
+        "https://0.0.0.0", "http://localhost"
+    )
+    return host
+
+
+def _list_ollama_models() -> List[str]:
+    """Return names of locally available Ollama models.
+
+    Uses the official ollama-python Client.list() endpoint, which queries the
+    /api/tags API under the hood. [src]
+    - https://raw.githubusercontent.com/ollama/ollama/main/docs/api.md
+    """
+
+    try:
+        from ollama import Client  # type: ignore[import]
+    except Exception:
+        return []
+
+    try:
+        client = Client(host=_resolve_ollama_host(), timeout=5.0)
+        resp = client.list()
+    except Exception:
+        return []
+
+    models: List[str] = []
+
+    # Newer ollama-python may return an object with a `.models` attribute; older
+    # versions or direct HTTP clients may return a dict or list. Handle all
+    # three forms.
+    items: Any
+    if hasattr(resp, "models"):
+        items = resp.models  # type: ignore[attr-defined]
+    elif isinstance(resp, dict):
+        items = resp.get("models") or resp.get("data") or []
+    else:
+        items = resp
+
+    if isinstance(items, list):
+        for item in items:
+            # Object-style model (e.g., dataclass with `.name`).
+            if hasattr(item, "name") and isinstance(getattr(item, "name"), str):
+                name = getattr(item, "name")
+                if name:
+                    models.append(name)
+                continue
+
+            if isinstance(item, dict):
+                name = item.get("name") or item.get("model")
+                if isinstance(name, str) and name:
+                    models.append(name)
+            elif isinstance(item, str) and item:
+                models.append(item)
+
+    return models
+
+
+def _load_custom_patients(path: Path) -> List[Dict[str, Any]]:
+    try:
+        if not path.exists():
+            return []
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            return []
+        out: List[Dict[str, Any]] = []
+        for item in data:
+            if isinstance(item, dict):
+                out.append(item)
+        return out
+    except Exception:
+        return []
+
+
+def _save_custom_patients(path: Path, patients: List[Dict[str, Any]]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(patients, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
  
  
 @st.cache_resource
@@ -210,7 +308,24 @@ def _extract_patient_facts_from_history(notes_text: str) -> Dict[str, Any]:
 
 
 def _compute_overall_status(alerts: List[Alert]) -> str:
-    return "YELLOW" if alerts else "GREEN"
+    if not alerts:
+        return "GREEN"
+
+    # Rationale: if severity is available (e.g., from LLM screening issues), use the
+    # worst severity to drive the overall status colour. Deterministic alerts that
+    # do not specify a severity are treated as at least moderate.
+    severity_rank = {"low": 0, "moderate": 1, "high": 2, "critical": 3}
+    max_rank = 1  # default to "moderate" when any alert exists but no severity set
+    for alert in alerts:
+        evidence = alert.evidence or {}
+        sev = str(evidence.get("severity") or "").lower()
+        rank = severity_rank.get(sev, max_rank)
+        if rank > max_rank:
+            max_rank = rank
+
+    if max_rank >= 2:
+        return "RED"
+    return "YELLOW"
 
 
 def _alert_resolution_ok(alert_id: str) -> bool:
@@ -549,7 +664,17 @@ def main() -> None:
         st.error("No mock patients found in `Data/mock_patients.json`")
         return
 
-    custom_patients = list(st.session_state.get("custom_patients") or [])
+    custom_session = list(st.session_state.get("custom_patients") or [])
+    custom_disk = _load_custom_patients(CUSTOM_PATIENTS_PATH)
+    merged_custom: List[Dict[str, Any]] = []
+    seen_ids = set()
+    for p in custom_disk + custom_session:
+        pid = p.get("patient_id")
+        if pid and pid not in seen_ids:
+            seen_ids.add(pid)
+            merged_custom.append(p)
+    custom_patients = merged_custom
+    st.session_state["custom_patients"] = custom_patients
 
     with st.expander("Add patient case", expanded=False):
         st.warning(
@@ -608,6 +733,7 @@ def main() -> None:
                 # appears in the list immediately on this rerun.
                 custom_patients = custom_patients + [patient_record]
                 st.session_state["custom_patients"] = custom_patients
+                _save_custom_patients(CUSTOM_PATIENTS_PATH, custom_patients)
                 # Rationale: auto-select the newly added patient to make it clear
                 # the add succeeded.
                 st.session_state["selected_patient_label"] = f"{pid} - {patient_record['name']}"
@@ -688,12 +814,28 @@ def main() -> None:
             index=0,
         )
         env_model = (os.getenv("OLLAMA_MODEL") or "").strip()
-        model_options = ["aadide/medgemma-1.5-4b-it-Q4_K_S", "Custom..."]
-        model_choice = st.selectbox("Ollama model", model_options, index=0)
+
+        discovered_models = _list_ollama_models()
+        base_options: List[str] = []
+        if discovered_models:
+            base_options = list(dict.fromkeys(discovered_models))  # preserve order, de-dup
+        else:
+            base_options = ["aadide/medgemma-1.5-4b-it-Q4_K_S"]
+
+        # Ensure the default demo model is always present as a fallback.
+        if "aadide/medgemma-1.5-4b-it-Q4_K_S" not in base_options:
+            base_options.append("aadide/medgemma-1.5-4b-it-Q4_K_S")
+
+        model_options = base_options + ["Custom..."]
+        default_index = 0
+        if env_model and env_model in base_options:
+            default_index = base_options.index(env_model)
+
+        model_choice = st.selectbox("Ollama model", model_options, index=default_index)
         if model_choice == "Custom...":
             ollama_model_ui = st.text_input("Custom model tag", value=(env_model or ""))
         else:
-            ollama_model_ui = model_options[0]
+            ollama_model_ui = model_choice
         if env_model:
             st.caption(f"OLLAMA_MODEL is set: {env_model} (UI model selection will be ignored)")
         num_ctx = st.number_input(
@@ -731,10 +873,39 @@ def main() -> None:
     status = st.session_state.get("analysis_status")
 
     if status == "GREEN":
-        st.success("GREEN: No alerts detected.")
         _mode = st.session_state.get("analysis_llm_mode")
         _use_ollama = st.session_state.get("analysis_use_ollama")
         _ollama_err = st.session_state.get("analysis_ollama_error")
+        # Rationale: when LLM screening is configured but fails, avoid showing a
+        # reassuring GREEN banner, since the screening layer is incomplete.
+        llm_screening_incomplete = (
+            _mode == "LLM screening (generate alerts)" and _use_ollama and bool(_ollama_err)
+        )
+        # Rationale: only show a GREEN banner when the full screening layer has
+        # run successfully (deterministic + LLM screening as configured). For
+        # runs where only deterministic rules were evaluated, use an
+        # informational banner instead of GREEN to avoid over-reassurance.
+        _dbg = st.session_state.get("analysis_screening_debug") or {}
+        _parse_status = _dbg.get("parse_status") or "unknown"
+        llm_screening_complete = (
+            _mode == "LLM screening (generate alerts)"
+            and _use_ollama
+            and not _ollama_err
+            and _parse_status in {"parsed_empty", "parsed_nonempty"}
+        )
+        if llm_screening_incomplete:
+            st.warning(
+                "INDETERMINATE: Deterministic rule-based checks did not trigger any alerts, "
+                "but LLM screening failed, so additional issues may have been missed."
+            )
+        elif llm_screening_complete:
+            st.success("GREEN: No alerts detected.")
+        else:
+            st.info(
+                "No deterministic alerts were triggered. LLM screening was not executed "
+                "for this run, so additional guideline-based issues may still exist."
+            )
+
         _active_range = st.session_state.get("analysis_retrieval_page_range")
         if _active_range is None:
             _range_text = "all available guideline pages"
@@ -791,6 +962,10 @@ def main() -> None:
                 "No alerts were generated because the deterministic rule-based checks evaluated the "
                 "structured patient context and none of the configured rules were triggered."
             )
+    elif status == "RED":
+        st.error(
+            f"RED: {len(alerts)} alert(s) to consider (at least one high/critical issue)."
+        )
     else:
         st.warning(f"YELLOW: {len(alerts)} alert(s) to consider.")
 

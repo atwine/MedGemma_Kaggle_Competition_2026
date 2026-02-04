@@ -6,6 +6,7 @@ This project uses Ollama for local inference.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 from typing import Any, Dict, List, Optional, TypedDict
 
@@ -88,8 +89,9 @@ class OllamaClient:
         try:
             self._last_error = None
             # Rationale: use an explicit client so we can control the host used for
-            # connectivity debugging.
-            client = Client(host=self._host, timeout=120.0)
+            # connectivity debugging. Allow up to 5 minutes for long-running
+            # local model calls before treating them as timeouts.
+            client = Client(host=self._host, timeout=600.0)
             # Rationale: keep outputs more deterministic for clinical UX.
             # Ollama supports passing generation parameters via `options` (e.g., temperature). [src]
             # - https://raw.githubusercontent.com/ollama/ollama/main/docs/api.md
@@ -140,6 +142,15 @@ class OllamaClient:
                 if not content:
                     self._last_error = "Ollama returned an empty message content"
                     return None
+                # Rationale: with structured outputs (`format`), `content` may already be
+                # a Python list/dict. Downstream callers (e.g. LLM screening) expect a
+                # JSON string, so we serialize non‑string content here instead of using
+                # str(content), which would not be valid JSON. [src]
+                if not isinstance(content, str):
+                    try:
+                        return json.dumps(content, ensure_ascii=False)
+                    except TypeError:
+                        return str(content)
                 return content
 
             if isinstance(response, dict):
@@ -149,7 +160,14 @@ class OllamaClient:
                     if not content:
                         self._last_error = "Ollama returned an empty message content"
                         return None
-                    return str(content)
+                    # See rationale above: ensure non‑string structured content is
+                    # serialized as proper JSON so parsers can consume it safely.
+                    if not isinstance(content, str):
+                        try:
+                            return json.dumps(content, ensure_ascii=False)
+                        except TypeError:
+                            return str(content)
+                    return content
 
             self._last_error = f"Unrecognized ollama response type: {type(response)}"
             return None
