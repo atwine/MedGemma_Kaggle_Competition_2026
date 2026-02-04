@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import copy
+import importlib
 import os
 import re
 import time
@@ -19,12 +20,18 @@ import streamlit as st
 
 from modules.alert_rules import Alert, run_alerts
 from modules.embedder import Embedder, EmbedderConfig
-from modules.explanation_generator import (
-    ExplanationResult,
-    generate_audit_checklist_alerts,
-    generate_explanation,
-    generate_stage3_synthesis_issues,
-)
+import modules.explanation_generator as explanation_generator
+
+# Rationale: Streamlit can keep stale module objects across reruns. If a newer
+# export was added to `modules.explanation_generator`, force a reload only when
+# the expected symbol is missing.
+if not hasattr(explanation_generator, "generate_audit_checklist_alerts"):
+    explanation_generator = importlib.reload(explanation_generator)
+
+ExplanationResult = explanation_generator.ExplanationResult
+generate_audit_checklist_alerts = explanation_generator.generate_audit_checklist_alerts
+generate_explanation = explanation_generator.generate_explanation
+generate_stage3_synthesis_issues = explanation_generator.generate_stage3_synthesis_issues
 from modules.llm_client import OllamaClient, OllamaConfig
 from modules.patient_parser import build_patient_context, load_mock_patients
 from modules.rag_engine import RagEngine

@@ -128,6 +128,8 @@ def generate_llm_screening_alerts(
 
     system: ChatMessage = {
         "role": "system",
+        # Rationale: strengthen the prompt to reduce hallucinated rules/citations and
+        # enforce strict JSON-only, guideline-grounded output.
         "content": ( """You are a clinical decision support system for HIV medication safety. Your task is to identify discrepancies between a patient's current clinical state and the treatment guidelines provided.
 
         ## INPUT STRUCTURE
@@ -186,7 +188,12 @@ def generate_llm_screening_alerts(
 
         ## OUTPUT FORMAT
         
-        Return ONLY a valid JSON array.
+        Return ONLY a valid JSON array (no markdown, no prose, no code fences).
+        Use double quotes for all JSON strings.
+        
+        **Citations are mandatory for any guideline-supported issue.**
+        - If issue_type != "information_gap": citations MUST be a non-empty array.
+        - If issue_type == "information_gap": citations MUST be [] (empty) and you must state it is not supported by the provided excerpts.
  
         - If a guideline-supported issue exists in the provided excerpts: output it with citations.
         - If patient facts suggest a potentially important issue but the provided excerpts do NOT contain a supporting rule:
@@ -195,9 +202,9 @@ def generate_llm_screening_alerts(
         - Output [] only if:
         (a) no guideline-supported issues are found AND
         (b) no information gaps / potential concerns requiring more guideline evidence are present.
-        Never invent citations.
+        Never invent citations (page_number or chunk_id). Never cite a chunk_id that is not present in the provided excerpts.
 
-        ```json
+        Example schema (do not wrap your output in code fences):
         [
         {
             "alert_id": "unique_string",
@@ -209,7 +216,6 @@ def generate_llm_screening_alerts(
             "citations": [{"page_number": int, "chunk_id": "string"}]
         }
         ]
-        ```
 
         ## CRITICAL INSTRUCTIONS
 
@@ -218,7 +224,9 @@ def generate_llm_screening_alerts(
         3. **Connect the dots** - if guidelines say "Drug X causes Condition Y" and patient has both Drug X and signs of Condition Y, flag it even if not explicitly stated as a contraindication
         4. **Check combinations** - a drug + abnormal lab + contributing comorbidity may together constitute a problem per guidelines
         5. **Flag missing monitoring** - if guidelines specify required monitoring and it's absent from patient data, that's a gap
-        6. **When uncertain, flag with lower severity** rather than missing a potential issue
+        6. **If guideline support exists but urgency is unclear, choose a lower severity** rather than overstating urgency
+        7. **If guideline support is missing, do NOT guess** - use issue_type="information_gap" and citations=[]
+        8. **Output must be JSON only** - do not include any other keys or text outside the JSON array
 
         ## EXAMPLE REASONING (do not use these specific rules - extract rules from provided guidelines)
 
