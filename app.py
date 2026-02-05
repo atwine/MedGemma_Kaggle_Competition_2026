@@ -57,6 +57,7 @@ NCD_GUIDELINE_PDF_PATH = (
 GUIDELINE_PDF_PATHS = [p for p in [CONSOLIDATED_GUIDELINE_PDF_PATH] if p.exists()]
 MOCK_PATIENTS_PATH = PROJECT_ROOT / "Data" / "mock_patients.json"
 CUSTOM_PATIENTS_PATH = PROJECT_ROOT / "Data" / "custom_patients.json"
+CANDIDATE_RULES_PATH = PROJECT_ROOT / "Data" / "candidate_rules.json"
 
 
 @st.cache_data
@@ -158,6 +159,32 @@ def _save_custom_patients(path: Path, patients: List[Dict[str, Any]]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as f:
             json.dump(patients, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _load_candidate_rules(path: Path) -> List[Dict[str, Any]]:
+    try:
+        if not path.exists():
+            return []
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            return []
+        out: List[Dict[str, Any]] = []
+        for item in data:
+            if isinstance(item, dict):
+                out.append(item)
+        return out
+    except Exception:
+        return []
+
+
+def _save_candidate_rules(path: Path, rules: List[Dict[str, Any]]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(rules, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
  
@@ -460,7 +487,8 @@ def _run_analysis(
             alerts = list(alerts) + checklist_alerts
 
     # Optional: LLM-first screening mode — generate alerts directly from Stage 1 summary
-    # and checklist evidence, even if deterministic rules are silent.
+    # and checklist evidence. Deterministic alerts remain the fallback when
+    # screening fails (error or unparseable output).
     if (
         use_ollama
         and llm_mode == "LLM screening (generate alerts)"
@@ -481,16 +509,26 @@ def _run_analysis(
         st.session_state["analysis_screening_patient_facts"] = _extract_patient_facts_from_history(
             context.notes_text
         )
-        alerts = list(screening_alerts)
-        deterministic_alerts = []
+
+        parse_status = (screening_debug.get("parse_status") or "").strip().lower()
+        last_err = llm_client.last_error
+
+        screening_succeeded = (
+            last_err is None
+            and parse_status in {"parsed_empty", "parsed_nonempty"}
+        )
+
+        if screening_succeeded:
+            alerts = list(screening_alerts)
+            deterministic_alerts = []
+
         if ollama_status is not None:
-            last_err = llm_client.last_error
             if last_err:
                 ollama_status.update(label=f"Ollama error: {last_err}", state="error")
             else:
                 ollama_status.update(label="Ollama connected (response received)", state="complete")
         if ollama_error is None:
-            ollama_error = llm_client.last_error
+            ollama_error = last_err
 
     # Rationale: reset per-alert review state for each analysis run. Without this,
     # a previous acknowledgment/override can incorrectly allow finalize on a new
@@ -806,9 +844,6 @@ def main() -> None:
         llm_mode = st.selectbox(
             "LLM mode",
             [
-                "Checklist only",
-                "Synthesis",
-                "Per-alert explanations",
                 "LLM screening (generate alerts)",
             ],
             index=0,
@@ -1020,6 +1055,30 @@ def main() -> None:
                         st.caption("Deterministic fallback explanation (LLM disabled).")
                 st.write(explanation.text)
 
+                # Rationale: allow promoting useful LLM-screening issues into a
+                # candidate list for future deterministic rules without changing
+                # rule logic at runtime.
+                if (alert.evidence or {}).get("type") == "llm_screening":
+                    if st.button(
+                        "Mark as candidate deterministic rule",
+                        key=f"candidate_rule_{alert.alert_id}",
+                    ):
+                        existing_rules = _load_candidate_rules(CANDIDATE_RULES_PATH)
+                        # Avoid duplicating the same alert_id in the candidate file.
+                        existing_ids = {
+                            str(r.get("alert_id")) for r in existing_rules if isinstance(r, dict)
+                        }
+                        if alert.alert_id not in existing_ids:
+                            candidate: Dict[str, Any] = {
+                                "alert_id": alert.alert_id,
+                                "title": alert.title,
+                                "message": alert.message,
+                                "evidence": alert.evidence,
+                            }
+                            existing_rules.append(candidate)
+                            _save_candidate_rules(CANDIDATE_RULES_PATH, existing_rules)
+                            st.success("Marked as candidate deterministic rule (saved under Data/candidate_rules.json).")
+
                 st.markdown("**Acknowledge / Override**")
                 st.radio(
                     "Action",
@@ -1058,6 +1117,16 @@ def main() -> None:
 
     st.subheader("Status")
     st.info("Workflow active: Save runs checks; Finalize requires review.")
+
+    with st.expander("Candidate deterministic rules (from LLM screening)", expanded=False):
+        rules = _load_candidate_rules(CANDIDATE_RULES_PATH)
+        if not rules:
+            st.caption(
+                "No candidate rules have been marked yet. Use 'Mark as candidate deterministic rule' "
+                "on an LLM-screening alert to add one."
+            )
+        else:
+            st.json(rules)
 
 
 if __name__ == "__main__":
