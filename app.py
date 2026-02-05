@@ -13,6 +13,7 @@ import json
 import os
 import re
 import time
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import datetime
@@ -40,6 +41,7 @@ from modules.vector_store import VectorSearchResult, create_vector_store
 from modules.stage1_summary import build_stage1_summary
 from modules.stage3_narrative import generate_stage3_narrative
 from modules.llm_screening import generate_llm_screening_alerts
+from modules.agentic_flow import QueryContext, run_agentic_flow
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -422,6 +424,47 @@ def _run_analysis(
         cfg = OllamaConfig(model=(ollama_model or "aadide/medgemma-1.5-4b-it-Q4_K_S"), num_ctx=ollama_num_ctx)
         llm_client = OllamaClient(cfg)
 
+    # Optional: agentic planner + per-subtask retrieval (debug-only, no UI change).
+    env_flag = (os.getenv("AGENTIC_RAG_DEBUG") or "").strip() == "1"
+    ui_flag = bool(st.session_state.get("agentic_ui_debug_enabled"))
+    agentic_debug_enabled = bool(env_flag or ui_flag)
+    agentic_debug_result = None
+
+    if agentic_debug_enabled:
+        try:
+            agentic_context = QueryContext(
+                question_text=(
+                    "Based on the Uganda HIV guidelines, what are the key "
+                    "clinical considerations for this patient?"
+                ),
+                patient_raw=patient_copy,
+                patient_summary=stage1_summary,
+                metadata={
+                    "llm_mode": llm_mode,
+                    "top_k": top_k,
+                    "index_max_pages": index_max_pages,
+                    "retrieval_page_range": retrieval_page_range,
+                },
+            )
+
+            agentic_debug_result = run_agentic_flow(
+                agentic_context,
+                embedder=rag._embedder,
+                vector_store=rag._vector_store,
+                top_k=top_k,
+                page_range=retrieval_page_range,
+                llm_client=llm_client,
+            )
+
+        except Exception as exc:
+            agentic_debug_result = {
+                "error": str(exc),
+                "type": exc.__class__.__name__,
+            }
+
+    st.session_state["agentic_debug_enabled"] = agentic_debug_enabled
+    st.session_state["agentic_debug_result"] = agentic_debug_result
+
     # Status box for any LLM activity in this run.
     ollama_status = st.status("Ollama: idle", expanded=False) if use_ollama else None
 
@@ -671,6 +714,25 @@ def _run_analysis(
     st.session_state["analysis_ollama_model"] = _client_used.model if _client_used is not None else None
     st.session_state["analysis_ollama_error"] = ollama_error
 
+    agentic_reasoner_debug = None
+    if st.session_state.get("agentic_debug_enabled"):
+        try:
+            base_result = st.session_state.get("agentic_debug_result")
+            agentic_reasoner_debug = {
+                "final_status": st.session_state.get("analysis_status"),
+                "final_alert_count": len(alerts),
+                "deterministic_alert_ids": [a.alert_id for a in deterministic_alerts],
+                "final_alert_ids": [a.alert_id for a in alerts],
+                "evidence_map_keys": list(evidence_map.keys()),
+                "agentic_result_present": base_result is not None,
+            }
+        except Exception as exc:
+            agentic_reasoner_debug = {
+                "error": str(exc),
+                "type": exc.__class__.__name__,
+            }
+    st.session_state["agentic_debug_reasoner"] = agentic_reasoner_debug
+
 
 def main() -> None:
     st.set_page_config(page_title="HIV Clinical Nudge Engine", layout="wide")
@@ -838,6 +900,11 @@ def main() -> None:
         )
         if retrieval_pages_choice == "99–114":
             retrieval_page_range = (99, 114)
+
+        st.checkbox(
+            "Enable Agentic RAG debug (experimental)",
+            key="agentic_ui_debug_enabled",
+        )
 
     with st.expander("LLM settings", expanded=False):
         use_ollama = st.checkbox("Use Ollama for explanations (if available)", value=True)
@@ -1011,6 +1078,34 @@ def main() -> None:
     else:
         lo, hi = _active_range
         st.caption(f"Retrieval page range: pages {lo}–{hi}")
+
+    agentic_enabled = st.session_state.get("agentic_debug_enabled", False)
+    if agentic_enabled:
+        with st.expander("Agentic RAG debug (experimental)", expanded=False):
+            agentic_result = st.session_state.get("agentic_debug_result")
+            agentic_reasoner = st.session_state.get("agentic_debug_reasoner")
+
+            if agentic_result is None and not agentic_reasoner:
+                st.caption("Agentic debug is enabled but no debug data was captured for this run.")
+            else:
+                st.markdown("**Planner + per-subtask retrieval (Phase 1 skeleton)**")
+                if isinstance(agentic_result, dict) and agentic_result.get("error"):
+                    st.error(f"Agentic flow error: {agentic_result.get('error')}")
+                    st.json(agentic_result)
+                elif agentic_result is not None:
+                    if is_dataclass(agentic_result):
+                        try:
+                            st.json(asdict(agentic_result))
+                        except Exception:
+                            st.write(agentic_result)
+                    else:
+                        st.write(agentic_result)
+
+                st.markdown("**Reasoner snapshot (post-synthesis context)**")
+                if agentic_reasoner is not None:
+                    st.json(agentic_reasoner)
+                else:
+                    st.caption("No reasoner snapshot captured.")
 
     if alerts:
         for item in st.session_state.get("analysis_results", []):
