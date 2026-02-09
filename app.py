@@ -434,8 +434,12 @@ def _run_analysis(
         try:
             agentic_context = QueryContext(
                 question_text=(
-                    "Based on the Uganda HIV guidelines, what are the key "
-                    "clinical considerations for this patient?"
+                    "Review this patient's symptoms, examination findings, "
+                    "and lab results (including trends over time). Could any "
+                    "of them be signs of drug toxicity from their current or "
+                    "past ART medications or co-medications? If so, what "
+                    "tests confirm it, and does the doctor's current plan "
+                    "adequately address the issue per Uganda HIV guidelines?"
                 ),
                 patient_raw=patient_copy,
                 patient_summary=stage1_summary,

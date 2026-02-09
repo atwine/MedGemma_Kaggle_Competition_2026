@@ -130,3 +130,102 @@ def days_since_lab(patient_context: PatientContext, lab_name: str) -> Optional[i
         return None
 
     return _days_between(lab.date, patient_context.encounter_date)
+
+
+# Lab trend computation -----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LabTrend:
+    """Summary of a single lab's historical values and direction."""
+
+    lab_name: str
+    values: List[Dict[str, Any]]  # [{"date": "YYYY-MM-DD", "value": ...}, ...]
+    direction: str  # "RISING", "FALLING", "STABLE", "SINGLE", "UNKNOWN"
+    summary_text: str  # human-readable one-liner for LLM prompts
+
+
+def _extract_numeric(entry: Dict[str, Any]) -> Optional[float]:
+    """Pull the first numeric value from a lab entry, ignoring 'date'."""
+    for k, v in entry.items():
+        if k == "date":
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def compute_lab_trends(
+    raw_labs: Dict[str, List[Dict[str, Any]]],
+    encounter_date: Optional[date] = None,
+) -> List[LabTrend]:
+    """Compute trend direction and summary text for each lab in raw patient data.
+
+    Rationale: doctors identify drug toxicity by spotting *trends* (e.g. rising
+    creatinine over years) rather than a single value.  This helper converts
+    the raw lab history into a structured summary the LLM can reason over.
+    """
+
+    trends: List[LabTrend] = []
+
+    for lab_name, entries in (raw_labs or {}).items():
+        if not entries:
+            continue
+
+        # Parse and sort chronologically, filtering out future dates if possible.
+        parsed: List[Dict[str, Any]] = []
+        for e in entries:
+            try:
+                d = _parse_iso_date(e["date"])
+            except Exception:
+                continue
+            if encounter_date is not None and d > encounter_date:
+                continue
+            numeric = _extract_numeric(e)
+            parsed.append({"date": e["date"], "value": numeric, "date_obj": d})
+
+        parsed.sort(key=lambda x: x["date_obj"])
+
+        # Build the simplified values list (date + value only, no date_obj).
+        values = [{"date": p["date"], "value": p["value"]} for p in parsed]
+
+        # Determine direction from numeric values.
+        numeric_vals = [p["value"] for p in parsed if p["value"] is not None]
+
+        if len(numeric_vals) == 0:
+            direction = "UNKNOWN"
+        elif len(numeric_vals) == 1:
+            direction = "SINGLE"
+        else:
+            # Compare each consecutive pair; count rises vs falls.
+            rises = sum(1 for i in range(1, len(numeric_vals)) if numeric_vals[i] > numeric_vals[i - 1])
+            falls = sum(1 for i in range(1, len(numeric_vals)) if numeric_vals[i] < numeric_vals[i - 1])
+            pairs = len(numeric_vals) - 1
+            if rises > pairs / 2:
+                direction = "RISING"
+            elif falls > pairs / 2:
+                direction = "FALLING"
+            else:
+                direction = "STABLE"
+
+        # Build a human-readable summary line.
+        parts: List[str] = []
+        for p in parsed:
+            val = p["value"]
+            val_str = str(val) if val is not None else "?"
+            parts.append(f"{val_str} ({p['date']})")
+        timeline = " -> ".join(parts) if parts else "no data"
+        summary_text = f"{lab_name}: {timeline} — {direction}"
+
+        trends.append(
+            LabTrend(
+                lab_name=lab_name,
+                values=values,
+                direction=direction,
+                summary_text=summary_text,
+            )
+        )
+
+    return trends
