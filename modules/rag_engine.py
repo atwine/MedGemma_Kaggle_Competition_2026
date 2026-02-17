@@ -15,7 +15,7 @@ import re
 
 from modules.alert_rules import Alert
 from modules.embedder import Embedder
-from modules.guideline_processor import GuidelineChunk, process_guidelines
+from modules.guideline_processor import GuidelineChunk, process_guidelines, process_markdown_guidelines
 from modules.patient_parser import PatientContext
 from modules.vector_store import VectorSearchResult, VectorStore
 
@@ -32,13 +32,16 @@ class RagEngine:
         self,
         *,
         project_root: Path,
-        guideline_pdf_paths: List[Path],
+        guideline_paths: List[Path] | None = None,
+        guideline_pdf_paths: List[Path] | None = None,
         embedder: Embedder,
         vector_store: VectorStore,
         config: RagConfig | None = None,
     ) -> None:
         self._project_root = project_root
-        self._guideline_pdf_paths = list(guideline_pdf_paths)
+        # Rationale: accept both new 'guideline_paths' and legacy 'guideline_pdf_paths'
+        # to avoid breaking existing call-sites.
+        self._guideline_paths = list(guideline_paths or guideline_pdf_paths or [])
         self._embedder = embedder
         self._vector_store = vector_store
         self._config = config or RagConfig()
@@ -57,16 +60,26 @@ class RagEngine:
             return 0
 
         total = 0
-        for pdf_path in self._guideline_pdf_paths:
-            chunks: List[GuidelineChunk] = process_guidelines(
-                pdf_path,
-                chunk_size=self._config.chunk_size,
-                overlap=self._config.overlap,
-                max_pages=max_pages,
-            )
+        for gpath in self._guideline_paths:
+            # Rationale: detect Markdown vs PDF by extension so callers can mix
+            # file types in a single guideline list.
+            if gpath.suffix.lower() in (".md", ".markdown"):
+                chunks: List[GuidelineChunk] = process_markdown_guidelines(
+                    gpath,
+                    chunk_size=self._config.chunk_size,
+                    overlap=self._config.overlap,
+                    max_pages=max_pages,
+                )
+            else:
+                chunks = process_guidelines(
+                    gpath,
+                    chunk_size=self._config.chunk_size,
+                    overlap=self._config.overlap,
+                    max_pages=max_pages,
+                )
 
             doc_prefix = (
-                pdf_path.stem.strip().lower().replace(" ", "_").replace("+", "_")
+                gpath.stem.strip().lower().replace(" ", "_").replace("+", "_")
             )
             prefixed = [
                 GuidelineChunk(

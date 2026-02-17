@@ -53,10 +53,18 @@ NCD_GUIDELINE_PDF_PATH = (
     / "Uganda+Integrated+Guidelines+for+the+management+of+NCDs-+Uganda+with+cover-FIN+14October2019.V4.pdf"
 )
 
-# Rationale: prefer the newer consolidated guideline PDF when present, but keep a
-# fallback to the legacy filename to avoid breaking existing setups.
-# Note: for this demo we embed/index only the consolidated guideline PDF.
-GUIDELINE_PDF_PATHS = [p for p in [CONSOLIDATED_GUIDELINE_PDF_PATH] if p.exists()]
+# Rationale: Markdown conversions of the guideline PDFs preserve table structures
+# that pypdf extraction drops. We now embed from the Markdown files instead of PDFs.
+GUIDELINE_MD_DIR = PROJECT_ROOT / "Data" / "MarkDown Files"
+GUIDELINE_PATHS: list[Path] = sorted(
+    p for p in GUIDELINE_MD_DIR.glob("*.md") if p.is_file()
+) if GUIDELINE_MD_DIR.is_dir() else []
+
+# Rationale: persistent Chroma collections keep old indexed chunks; bump this
+# when the ingestion/cleaning/chunking logic changes to force a fresh collection.
+GUIDELINE_INDEX_VERSION = 1
+# Backward-compatible alias used by downstream code.
+GUIDELINE_PDF_PATHS = GUIDELINE_PATHS
 MOCK_PATIENTS_PATH = PROJECT_ROOT / "Data" / "mock_patients.json"
 CUSTOM_PATIENTS_PATH = PROJECT_ROOT / "Data" / "custom_patients.json"
 CANDIDATE_RULES_PATH = PROJECT_ROOT / "Data" / "candidate_rules.json"
@@ -218,21 +226,24 @@ def _get_rag_engine(
     )
 
     # Rationale: persistent Chroma collections keep old indexed chunks. Include the
-    # active guideline PDF in the collection name to prevent mixing chunks from
-    # previous documents and to force a clean re-index when the source PDF changes.
+    # active guideline sources in the collection name to prevent mixing chunks from
+    # previous documents and to force a clean re-index when the source files change.
     guideline_key = "no_guideline"
-    if GUIDELINE_PDF_PATHS:
-        guideline_key = (
-            GUIDELINE_PDF_PATHS[0].stem.strip().lower().replace(" ", "_").replace("+", "_")
-        )
+    if GUIDELINE_PATHS:
+        # Rationale: hash all file stems so the collection auto-resets when any
+        # source file is added, removed or renamed.
+        guideline_key = "_".join(
+            p.stem.strip().lower().replace(" ", "_").replace("+", "_")[:20]
+            for p in GUIDELINE_PATHS
+        )[:80]  # keep the collection name within Chroma's limits
     vector_store = create_vector_store(
         project_root=PROJECT_ROOT,
         prefer_chroma=prefer_chroma,
-        collection_name=f"uganda_hiv_guidelines__{model_key}__{guideline_key}",
+        collection_name=f"uganda_hiv_guidelines__{model_key}__{guideline_key}__v{GUIDELINE_INDEX_VERSION}",
     )
     return RagEngine(
         project_root=PROJECT_ROOT,
-        guideline_pdf_paths=GUIDELINE_PDF_PATHS,
+        guideline_paths=GUIDELINE_PATHS,
         embedder=embedder,
         vector_store=vector_store,
     )
@@ -748,11 +759,11 @@ def main() -> None:
     )
 
     st.subheader("Guidelines")
-    if GUIDELINE_PDF_PATHS:
-        st.write("Using local PDFs:")
-        for p in GUIDELINE_PDF_PATHS:
-            st.write(f"- `{p}`")
-        st.success("Guidelines PDF found.")
+    if GUIDELINE_PATHS:
+        st.write("Using Markdown guideline files:")
+        for p in GUIDELINE_PATHS:
+            st.write(f"- `{p.name}`")
+        st.success(f"{len(GUIDELINE_PATHS)} guideline file(s) found.")
     else:
         st.error(
             "Guidelines PDF not found. Place it under `Data/` as specified in `initial-prompt-template.md`."
@@ -882,28 +893,27 @@ def main() -> None:
             value="all-MiniLM-L6-v2",
         )
         top_k = st.slider("Top-K guideline chunks", min_value=1, max_value=10, value=5)
-        # Rationale: ensure this is always defined to avoid UnboundLocalError.
-        index_max_pages: Optional[int] = 10
+        # Rationale: default to indexing all pages so Markdown tables/flowcharts are
+        # consistently embedded across the entire document set.
+        index_max_pages: Optional[int] = None
         index_pages_choice = st.selectbox(
             "Index max pages",
-            options=["All", "10", "20", "50", "100"],
-            index=1,
+            options=["All"],
+            index=0,
         )
-        if index_pages_choice == "All":
-            index_max_pages = None
-        else:
-            index_max_pages = int(index_pages_choice)
+        index_max_pages = None
 
         # Rationale: Stage 2 — optional retrieval filter by guideline page range.
         retrieval_page_range: Optional[tuple[int, int]] = None
         retrieval_pages_choice = st.selectbox(
             "Retrieval page range",
-            options=["All", "99–114"],
+            # Rationale: default to querying across all pages so no guideline
+            # content is unintentionally excluded.
+            options=["All"],
             index=0,
             help="Constrain RAG retrieval to specific guideline pages (uses chunk metadata).",
         )
-        if retrieval_pages_choice == "99–114":
-            retrieval_page_range = (99, 114)
+        retrieval_page_range = None
 
         st.checkbox(
             "Enable Agentic RAG debug (experimental)",
