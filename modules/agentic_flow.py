@@ -14,6 +14,7 @@ retrieval, reasoning, and verification.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -75,6 +76,9 @@ class AgenticResult:
     """
 
     final_answer_text: str
+    # Rationale: new output requested by updated ARTEMIS instructions. Kept
+    # optional and additive to preserve existing behaviour and call-sites.
+    updated_management_plan_text: Optional[str] = None
     used_chunks: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     debug_info: Dict[str, Any] = field(default_factory=dict)
@@ -446,6 +450,331 @@ def _reason(
         )
 
 
+def _reason_updated_management_plan(
+    context: QueryContext,
+    evidence_bundles: List[EvidenceBundle],
+    *,
+    llm_client: Optional[OllamaClient] = None,
+) -> Optional[str]:
+    # Rationale: Part 3 requires adding a new structured "UPDATED MANAGEMENT PLAN"
+    # output alongside the existing toxicity checklist output.
+    if llm_client is None:
+        return None
+
+    def _strip_code_fences(text: str) -> str:
+        # Rationale: tolerate models that wrap JSON in ```json fences.
+        t = (text or "").strip()
+        if not t.startswith("```"):
+            return t
+        lines = t.splitlines()
+        if not lines:
+            return t
+        if lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+
+    def _validate_plan_json(text: str) -> List[str]:
+        # Rationale: output must be machine-checkable and reliably structured.
+        issues: List[str] = []
+        raw = _strip_code_fences(text)
+        if not raw:
+            return ["empty_output"]
+
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            return ["invalid_json"]
+
+        if not isinstance(obj, dict):
+            issues.append("root_not_object")
+            return issues
+
+        # Rationale: Part 4 requires an explicit regimen decision (Switch / Hold temporarily / Continue)
+        # as a critical decision point.
+        required_keys = [
+            "art_regimen_decision",
+            "problems",
+            "monitoring_plan",
+            "patient_counselling",
+        ]
+        for k in required_keys:
+            if k not in obj:
+                issues.append(f"missing_key:{k}")
+
+        ard = obj.get("art_regimen_decision")
+        if not isinstance(ard, dict):
+            issues.append("art_regimen_decision_wrong_type")
+        else:
+            if "decision" not in ard or "reason" not in ard:
+                issues.append("art_regimen_decision_missing_fields")
+            else:
+                decision = str(ard.get("decision") or "").strip()
+                allowed = {"Switch", "Hold temporarily", "Continue"}
+                if decision not in allowed:
+                    issues.append("art_regimen_decision_bad_decision")
+                reason = str(ard.get("reason") or "").strip()
+                if not reason:
+                    issues.append("art_regimen_decision_empty_reason")
+
+        problems = obj.get("problems")
+        if not isinstance(problems, list) or not problems:
+            issues.append("problems_not_nonempty_list")
+        else:
+            seen: set[str] = set()
+            for idx, p in enumerate(problems[:10]):
+                if not isinstance(p, dict):
+                    issues.append(f"problem_{idx}_not_object")
+                    continue
+                for k in ["problem", "action", "reason", "clinician_plan_for_this_problem"]:
+                    if k not in p:
+                        issues.append(f"problem_{idx}_missing_key:{k}")
+                # Heuristic: avoid task-like "problem" naming.
+                prob = str(p.get("problem") or "")
+                low_prob = prob.strip().lower()
+                if (
+                    low_prob.startswith("assess")
+                    or low_prob.startswith("check")
+                    or low_prob.startswith("review")
+                    or low_prob.startswith("evaluate")
+                    or low_prob.startswith("screen")
+                    or low_prob.startswith("monitor")
+                ):
+                    issues.append(f"problem_{idx}_looks_like_task")
+
+                # Rationale: prevent duplicate problems (common failure mode in draft output).
+                norm = " ".join(low_prob.split())
+                if norm:
+                    if norm in seen:
+                        issues.append(f"problem_{idx}_duplicate")
+                    seen.add(norm)
+                cp = p.get("clinician_plan_for_this_problem")
+                if isinstance(cp, dict):
+                    if "decision" not in cp or "explanation" not in cp:
+                        issues.append(f"problem_{idx}_clinician_plan_missing_fields")
+                    else:
+                        decision = str(cp.get("decision") or "").strip()
+                        allowed = {"Agree", "Disagree", "Gap", "Not Addressed"}
+                        if decision not in allowed:
+                            issues.append(f"problem_{idx}_clinician_plan_bad_decision")
+                elif not isinstance(cp, str):
+                    issues.append(f"problem_{idx}_clinician_plan_wrong_type")
+
+        mp = obj.get("monitoring_plan")
+        if not isinstance(mp, (str, list, dict)):
+            issues.append("monitoring_plan_wrong_type")
+
+        pc = obj.get("patient_counselling")
+        if not isinstance(pc, list):
+            issues.append("patient_counselling_not_list")
+
+        return issues
+
+    def _organize_plan_json(
+        *,
+        draft_json_text: str,
+        validation_issues: List[str],
+    ) -> Optional[str]:
+        # Rationale: act as a small "organizer agent" that repairs common
+        # structure problems (duplicates, task-like problems, ordering) while
+        # keeping the schema unchanged.
+        if not draft_json_text.strip():
+            return None
+
+        messages = _build_plan_messages(
+            retry_feedback=(
+                "Draft plan JSON must be reorganized and repaired. Issues: "
+                + ", ".join(validation_issues)
+                + "\n\n"
+                "You MUST de-duplicate repeated problems, merge overlapping ones, "
+                "and rewrite problem titles as patient problems/clinical decisions (not tasks). "
+                "Order problems from most urgent/high-risk to least. "
+                "You MUST include a valid art_regimen_decision with decision one of: Switch, Hold temporarily, Continue. "
+                "Return ONLY the corrected JSON object."
+            )
+        )
+
+        # Provide the draft JSON as additional context (user message) so the
+        # organizer can repair it deterministically.
+        messages = list(messages) + [
+            {
+                "role": "user",
+                "content": (
+                    "Draft management plan JSON (repair this):\n" + _strip_code_fences(draft_json_text)
+                ),
+            }
+        ]
+
+        repaired = llm_client.chat(messages)
+        if repaired is None:
+            return None
+        repaired = _strip_code_fences(repaired)
+        issues = _validate_plan_json(repaired)
+        if issues:
+            return None
+        return repaired
+
+    def _build_plan_messages(*, retry_feedback: Optional[str] = None) -> List[Dict[str, str]]:
+        system_text = (
+            "You are an HIV clinician assistant. Using ONLY the provided guideline excerpts and "
+            "the patient data in the user message, produce an UPDATED MANAGEMENT PLAN.\n\n"
+            "CRITICAL OUTPUT RULES:\n"
+            "- Output ONLY a single JSON object. Do NOT output markdown, code fences, or any extra text.\n"
+            "- Do NOT include analysis, thinking, rationale preambles, or meta commentary.\n"
+            "- Do NOT output any placeholders or template examples.\n"
+            "- Problems must be PATIENT PROBLEMS / CLINICAL DECISIONS (not tasks like 'Assess', 'Check', 'Review').\n"
+            "- Every Action must be specific enough that a clinician can act on it.\n"
+            "- Every Reason must use patient facts and be supported by the provided guideline excerpts.\n"
+            "- If you cannot justify an action from the excerpts, write: Uncertain: why you are uncertain (do not guess).\n\n"
+            "INTERNAL SELF-CHECK (DO NOT OUTPUT): Before finalising, silently ask yourself:\n"
+            "- Did I blame an ARV for something? If yes: Do I have a SPECIFIC guideline excerpt supporting ARV causation? If no guideline support, reconsider.\n"
+            "- Did I recommend a permanent ARV switch? If yes: Do the guidelines support a permanent switch vs temporary hold? Is this an acute/reversible situation? If uncertain, reconsider.\n"
+            "- Did I address everything in the clinician's plan — including things they got right? If no, add them.\n"
+            "- Is every action in my plan specific enough that a clinician can act on it? If not, add the drug name, dose, or timeframe.\n\n"
+            "REQUIRED JSON KEYS (root object):\n"
+            "- art_regimen_decision: object with keys decision + reason (decision must be exactly one of: Switch, Hold temporarily, Continue)\n"
+            "- problems: array of problem objects (in priority order)\n"
+            "- monitoring_plan: string OR array describing what labs to repeat, when, and what result triggers action\n"
+            "- patient_counselling: array of strings\n\n"
+            "REQUIRED KEYS (art_regimen_decision):\n"
+            "- decision: one of Switch, Hold temporarily, Continue\n"
+            "- reason: string (patient facts + guideline-grounded OR Uncertain: ...)\n\n"
+            "REQUIRED KEYS (each item in problems):\n"
+            "- problem: string (a real patient problem / clinical decision)\n"
+            "- action: string (specific action OR Uncertain: ...)\n"
+            "- reason: string (patient facts + guideline-grounded OR Uncertain: ...)\n"
+            "- clinician_plan_for_this_problem: object with keys:\n"
+            "  - decision: one of Agree, Disagree, Gap, Not Addressed\n"
+            "  - explanation: string\n"
+        )
+
+        if retry_feedback:
+            system_text += (
+                "\n\nFORMAT FIX REQUIRED:\n"
+                f"{retry_feedback}\n"
+                "Rewrite the plan to fully comply. Output ONLY the corrected plan."
+            )
+
+        patient = context.patient_raw or {}
+        question = (context.question_text or "").strip() or (
+            "Clinical guideline support for this patient."
+        )
+        patient_id = patient.get("patient_id")
+        patient_name = patient.get("name")
+
+        lab_trends_text = ""
+        try:
+            raw_labs = patient.get("labs") or {}
+            encounter_date_str = (patient.get("today_encounter") or {}).get("date")
+            enc_date = None
+            if encounter_date_str:
+                from datetime import datetime as _dt
+                enc_date = _dt.strptime(encounter_date_str, "%Y-%m-%d").date()
+            trends = compute_lab_trends(raw_labs, encounter_date=enc_date)
+            if trends:
+                lab_trends_text = "\n".join(t.summary_text for t in trends)
+        except Exception:
+            lab_trends_text = ""
+
+        doctors_plan = ""
+        try:
+            today = patient.get("today_encounter") or {}
+            plan_parts: List[str] = []
+            note = (today.get("note") or "").strip()
+            if note:
+                plan_parts.append(f"Today's note: {note}")
+            orders = today.get("orders") or []
+            if orders:
+                plan_parts.append(f"Orders: {orders}")
+            med_changes = today.get("med_changes") or []
+            if med_changes:
+                plan_parts.append(f"Medication changes: {med_changes}")
+            doctors_plan = "\n".join(plan_parts) if plan_parts else "No plan documented."
+        except Exception:
+            doctors_plan = "No plan documented."
+
+        regimen_str = ", ".join(patient.get("art_regimen_current") or []) or "unknown"
+        notes_text = ""
+        try:
+            ctx = build_patient_context(patient)
+            notes_text = (ctx.notes_text or "").strip()[:600]
+        except Exception:
+            pass
+
+        evidence_lines: List[str] = []
+        for bundle in evidence_bundles:
+            chunks = list(bundle.chunks or [])
+            if not chunks:
+                continue
+            evidence_lines.append(f"Subtask {bundle.subtask_name}:")
+            for r in chunks[:3]:
+                try:
+                    metadata = getattr(r, "metadata", {}) or {}
+                    page = metadata.get("page_number")
+                    chunk_id = getattr(r, "chunk_id", None)
+                    doc_text = getattr(r, "document", "") or ""
+                except Exception:
+                    continue
+                preview = doc_text.replace("\n", " ")
+                if len(preview) > 300:
+                    preview = preview[:300] + "…"
+                evidence_lines.append(f"- page {page}, chunk {chunk_id}: {preview}")
+            evidence_lines.append("")
+        evidence_text = "\n".join(evidence_lines) or "No evidence retrieved."
+
+        return [
+            {"role": "system", "content": system_text},
+            {
+                "role": "user",
+                "content": (
+                    f"Patient id: {patient_id}, name: {patient_name}\n"
+                    f"Current regimen: {regimen_str}\n"
+                    f"Question: {question}\n\n"
+                    f"Patient notes:\n{notes_text}\n\n"
+                    f"Lab trends:\n{lab_trends_text or 'No lab history available.'}\n\n"
+                    f"Doctor's current plan:\n{doctors_plan}\n\n"
+                    f"Guideline excerpts:\n{evidence_text}"
+                ),
+            },
+        ]
+
+    try:
+        messages = _build_plan_messages()
+        plan_answer = llm_client.chat(messages)
+        if plan_answer is None:
+            return None
+
+        issues = _validate_plan_json(plan_answer)
+        if not issues:
+            return _strip_code_fences(plan_answer)
+
+        # One retry with explicit format feedback (non-blocking if it still fails).
+        feedback = "Previous output failed validation: " + ", ".join(issues)
+        retry_messages = _build_plan_messages(retry_feedback=feedback)
+        plan_retry = llm_client.chat(retry_messages)
+        if plan_retry is None:
+            return plan_answer
+
+        retry_issues = _validate_plan_json(plan_retry)
+        if not retry_issues:
+            return _strip_code_fences(plan_retry)
+
+        # Organizer pass: attempt to repair/organize into a valid, de-duplicated
+        # management plan JSON.
+        organized = _organize_plan_json(
+            draft_json_text=plan_retry,
+            validation_issues=retry_issues,
+        )
+        if organized is not None:
+            return organized
+
+        # If still invalid, return the latest raw output for debugging/display.
+        return _strip_code_fences(plan_retry)
+    except Exception:
+        return None
+
+
 def _verify(
     draft_answer: str,
     evidence_bundles: List[EvidenceBundle],
@@ -499,6 +828,11 @@ def run_agentic_flow(
         page_range=page_range,
     )
     draft_answer = _reason(normalized, subtasks, evidence, llm_client=llm_client)
+    updated_management_plan_text = _reason_updated_management_plan(
+        normalized,
+        evidence,
+        llm_client=llm_client,
+    )
     verifier_report = _verify(draft_answer, evidence, normalized)
 
     debug_info: Dict[str, Any] = {
@@ -506,10 +840,14 @@ def run_agentic_flow(
         "subtasks": subtasks,
         "evidence_bundles": evidence,
         "verifier_report": verifier_report,
+        # Rationale: store new Part 3 output for debug UI consumption without
+        # changing existing behaviour.
+        "updated_management_plan_text": updated_management_plan_text,
     }
 
     return AgenticResult(
         final_answer_text=draft_answer,
+        updated_management_plan_text=updated_management_plan_text,
         used_chunks=[],
         warnings=[
             "agentic flow is in Phase 1 skeleton mode; no real planning/"

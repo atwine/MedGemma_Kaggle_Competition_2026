@@ -892,7 +892,7 @@ def main() -> None:
             "Embedding model (SentenceTransformers)",
             value="all-MiniLM-L6-v2",
         )
-        top_k = st.slider("Top-K guideline chunks", min_value=1, max_value=10, value=5)
+        top_k = st.slider("Top-K guideline chunks", min_value=1, max_value=10, value=10)
         # Rationale: default to indexing all pages so Markdown tables/flowcharts are
         # consistently embedded across the entire document set.
         index_max_pages: Optional[int] = None
@@ -918,6 +918,7 @@ def main() -> None:
         st.checkbox(
             "Enable Agentic RAG debug (experimental)",
             key="agentic_ui_debug_enabled",
+            value=True,
         )
 
     with st.expander("LLM settings", expanded=False):
@@ -958,7 +959,7 @@ def main() -> None:
             "Context window (num_ctx)",
             min_value=1024,
             max_value=131072,
-            value=8192,
+            value=32000,
             step=1024,
         )
         st.session_state["llm_num_ctx"] = int(num_ctx)
@@ -1120,6 +1121,29 @@ def main() -> None:
                     st.json(agentic_reasoner)
                 else:
                     st.caption("No reasoner snapshot captured.")
+
+    # Rationale: surface the new Part 3 "UPDATED MANAGEMENT PLAN" output in the
+    # main Results flow (before alert review actions) so it is easy to find.
+    if agentic_enabled:
+        agentic_result = st.session_state.get("agentic_debug_result")
+        updated_plan_text = None
+        try:
+            if is_dataclass(agentic_result):
+                updated_plan_text = getattr(agentic_result, "updated_management_plan_text", None)
+                if updated_plan_text is None:
+                    dbg = getattr(agentic_result, "debug_info", None) or {}
+                    if isinstance(dbg, dict):
+                        updated_plan_text = dbg.get("updated_management_plan_text")
+        except Exception:
+            updated_plan_text = None
+
+        if isinstance(updated_plan_text, str) and updated_plan_text.strip():
+            with st.expander("UPDATED MANAGEMENT PLAN (NEW)", expanded=True):
+                try:
+                    obj = json.loads(updated_plan_text)
+                    st.json(obj)
+                except Exception:
+                    st.text(updated_plan_text)
 
     if alerts:
         for item in st.session_state.get("analysis_results", []):
