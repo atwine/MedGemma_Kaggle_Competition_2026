@@ -5,6 +5,7 @@
     "sex": "M",
     "age_years": 34,
     "art_regimen_current": ["TDF", "3TC", "DTG"],
+    "other_medications": [],
     "regimen_history": [
       {
         "start_date": "2023-01-10",
@@ -12,11 +13,16 @@
         "regimen": ["TDF", "3TC", "DTG"]
       }
     ],
+    "intake": {
+      "complaints_symptoms": "No new complaints",
+      "examination_findings": "Appears well",
+      "prior_history": "Feels well. Adherence reported good."
+    },
     "visits": [
       {
         "date": "2026-01-22",
-        "type": "routine",
-        "clinician_note": "Feels well. No new complaints. Adherence reported good."
+        "type": "intake",
+        "clinician_note": "Complaints & Symptoms:\nNo new complaints\n\nExamination Findings:\nAppears well\n\nPrior History:\nFeels well. Adherence reported good."
       }
     ],
     "labs": {
@@ -44,6 +50,7 @@
     "sex": "F",
     "age_years": 29,
     "art_regimen_current": ["TDF", "3TC", "DTG"],
+    "other_medications": [],
     "regimen_history": [
       {
         "start_date": "2022-06-14",
@@ -51,11 +58,16 @@
         "regimen": ["TDF", "3TC", "DTG"]
       }
     ],
+    "intake": {
+      "complaints_symptoms": "None reported",
+      "examination_findings": "Stable, no abnormalities noted",
+      "prior_history": "Stable on ART since 2022. Good adherence."
+    },
     "visits": [
       {
         "date": "2025-12-15",
-        "type": "routine",
-        "clinician_note": "Stable on ART."
+        "type": "intake",
+        "clinician_note": "Complaints & Symptoms:\nNone reported\n\nExamination Findings:\nStable, no abnormalities noted\n\nPrior History:\nStable on ART since 2022. Good adherence."
       }
     ],
     "labs": {
@@ -84,6 +96,7 @@
     "sex": "M",
     "age_years": 41,
     "art_regimen_current": ["TDF", "3TC", "EFV"],
+    "other_medications": [],
     "regimen_history": [
       {
         "start_date": "2024-02-01",
@@ -91,11 +104,16 @@
         "regimen": ["TDF", "3TC", "EFV"]
       }
     ],
+    "intake": {
+      "complaints_symptoms": "Poor sleep and vivid dreams for several weeks. No suicidal ideation.",
+      "examination_findings": "Alert and oriented, no acute distress",
+      "prior_history": "Started EFV-based regimen in February 2024."
+    },
     "visits": [
       {
         "date": "2026-01-22",
-        "type": "routine",
-        "clinician_note": "Reports poor sleep and vivid dreams for several weeks."
+        "type": "intake",
+        "clinician_note": "Complaints & Symptoms:\nPoor sleep and vivid dreams for several weeks. No suicidal ideation.\n\nExamination Findings:\nAlert and oriented, no acute distress\n\nPrior History:\nStarted EFV-based regimen in February 2024."
       }
     ],
     "labs": {
@@ -120,6 +138,7 @@
     "sex": "F",
     "age_years": 37,
     "art_regimen_current": ["TDF", "3TC", "DTG"],
+    "other_medications": [],
     "regimen_history": [
       {
         "start_date": "2023-03-20",
@@ -127,11 +146,16 @@
         "regimen": ["TDF", "3TC", "DTG"]
       }
     ],
+    "intake": {
+      "complaints_symptoms": "Omusawo, mpulira obulumi mu lubuto (abdominal pain), but no fever",
+      "examination_findings": "Appetite okay, no fever",
+      "prior_history": "On TLD since March 2023. Generally stable."
+    },
     "visits": [
       {
         "date": "2026-01-22",
-        "type": "routine",
-        "clinician_note": "Mixed-language note: 'Omusawo, mpulira obulumi mu lubuto, but no fever.'"
+        "type": "intake",
+        "clinician_note": "Complaints & Symptoms:\nOmusawo, mpulira obulumi mu lubuto (abdominal pain), but no fever\n\nExamination Findings:\nAppetite okay, no fever\n\nPrior History:\nOn TLD since March 2023. Generally stable."
       }
     ],
     "labs": {

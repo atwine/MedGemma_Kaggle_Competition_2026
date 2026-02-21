@@ -6,7 +6,7 @@ that deterministic alert rules can consume.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 import json
 from pathlib import Path
@@ -38,6 +38,10 @@ class PatientContext:
     art_regimen_current: List[str]
     notes_text: str
     latest_labs: Dict[str, LabResult]
+    # NEW: Structured access to intake fields (optional, backward compatible)
+    other_medications: List[str] = field(default_factory=list)
+    complaints_symptoms: str = ""
+    examination_findings: str = ""
 
 
 def load_mock_patients(path: Path) -> List[Dict[str, Any]]:
@@ -55,6 +59,7 @@ def build_patient_context(patient: Dict[str, Any]) -> PatientContext:
     - current ART regimen
     - concatenated notes text (history + today)
     - latest lab values by lab name
+    - structured intake fields (optional, for new patient records)
     """
 
     encounter_date = _parse_iso_date(patient["today_encounter"]["date"])
@@ -87,6 +92,12 @@ def build_patient_context(patient: Dict[str, Any]) -> PatientContext:
         if latest is not None:
             latest_labs["viral_load"] = latest
 
+    # NEW: Extract structured fields if available (backward compatible)
+    other_meds = list(patient.get("other_medications") or [])
+    intake = patient.get("intake") or {}
+    complaints = intake.get("complaints_symptoms", "")
+    exam_findings = intake.get("examination_findings", "")
+
     return PatientContext(
         patient_id=str(patient.get("patient_id")),
         name=str(patient.get("name")),
@@ -94,6 +105,9 @@ def build_patient_context(patient: Dict[str, Any]) -> PatientContext:
         art_regimen_current=art_regimen_current,
         notes_text=notes_text,
         latest_labs=latest_labs,
+        other_medications=other_meds,
+        complaints_symptoms=complaints,
+        examination_findings=exam_findings,
     )
 
 

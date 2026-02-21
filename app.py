@@ -753,21 +753,10 @@ def main() -> None:
     st.set_page_config(page_title="HIV Clinical Nudge Engine", layout="wide")
     _init_session_state()
 
-    st.title("HIV Clinical Nudge Engine (Demo)")
+    st.title("HIV Clinical Nudge Engine")
     st.caption(
         "Decision support only. Clinician retains final authority. Synthetic data only."
     )
-
-    st.subheader("Guidelines")
-    if GUIDELINE_PATHS:
-        st.write("Using Markdown guideline files:")
-        for p in GUIDELINE_PATHS:
-            st.write(f"- `{p.name}`")
-        st.success(f"{len(GUIDELINE_PATHS)} guideline file(s) found.")
-    else:
-        st.error(
-            "Guidelines PDF not found. Place it under `Data/` as specified in `initial-prompt-template.md`."
-        )
 
     if not MOCK_PATIENTS_PATH.exists():
         st.error("Mock patients file not found: `Data/mock_patients.json`")
@@ -792,55 +781,155 @@ def main() -> None:
     st.session_state["custom_patients"] = custom_patients
 
     with st.expander("Add patient case", expanded=False):
-        st.warning(
-            "For testing: avoid entering real names/identifiers. Use coded IDs or de-identified data."
+        st.markdown("""
+            <div style='background-color: #FFF4E6; padding: 12px; border-radius: 6px; border-left: 4px solid #F4A261; margin-bottom: 15px;'>
+                <p style='color: #E76F51; margin: 0; font-weight: 500;'>⚠️ For testing: avoid entering real names/identifiers. Use coded IDs or de-identified data.</p>
+            </div>
+        """, unsafe_allow_html=True)
+
+        new_patient_id = st.text_input("Patient Identifier", key="new_case_patient_id")
+        
+        new_patient_name = st.text_input(
+            "Patient Name",
+            key="new_case_patient_name",
+            help="Full name or pseudonym for the patient"
         )
 
-        new_patient_id = st.text_input("Patient ID", key="new_case_patient_id")
+        col1, col2 = st.columns(2)
+        with col1:
+            new_age = st.number_input(
+                "Age (years)",
+                min_value=0,
+                max_value=120,
+                value=None,
+                key="new_case_age",
+                help="Patient age in years"
+            )
+        with col2:
+            new_sex = st.selectbox(
+                "Sex",
+                options=["", "M", "F"],
+                key="new_case_sex",
+                help="Biological sex"
+            )
 
-        st.caption("Optional: enter patient history, including any prior labs and events.")
-        new_prev_note = st.text_area("Patient History", key="new_case_prev_note", height=80)
-        history_text = (new_prev_note or "").strip()
-        approx_tokens = len(history_text.split()) if history_text else 0
-        current_ctx = st.session_state.get("llm_num_ctx")
-        if current_ctx:
-            st.caption(f"Approx. history length: ~{approx_tokens} tokens vs context window {current_ctx} tokens.")
-        else:
-            st.caption(f"Approx. history length: ~{approx_tokens} tokens.")
+        new_art_regimen = st.text_input(
+            "Current ART Regimen (comma-separated, e.g., TDF, 3TC, DTG)",
+            key="new_case_art_regimen",
+            help="Enter current antiretroviral medications separated by commas"
+        )
+
+        new_other_meds = st.text_area(
+            "Other Medications",
+            key="new_case_other_meds",
+            height=60,
+            help="Non-ARV medications (e.g., ibuprofen, metformin, carbamazepine). One per line or comma-separated."
+        )
+
+        new_complaints = st.text_area(
+            "Complaints & Symptoms",
+            key="new_case_complaints",
+            height=80,
+            help="Current symptoms and patient complaints"
+        )
+
+        new_exam_findings = st.text_area(
+            "Examination Findings",
+            key="new_case_exam_findings",
+            height=80,
+            help="Physical examination findings and observations"
+        )
+
+        st.caption("Optional: enter prior labs, events, and historical notes.")
+        new_prior_history = st.text_area(
+            "Prior History",
+            key="new_case_prior_history",
+            height=80
+        )
 
         if st.button("Add case to patient list"):
             pid = (new_patient_id or "").strip()
+            pname = (new_patient_name or "").strip()
             if not pid:
                 st.error("Patient ID is required.")
+            elif not pname:
+                st.error("Patient Name is required.")
             elif any((p.get("patient_id") == pid) for p in (list(patients) + custom_patients)):
                 st.error("That Patient ID already exists in the current patient list.")
             else:
                 encounter_iso = datetime.date.today().isoformat()
 
+                # Parse ART regimen from comma-separated input
+                art_regimen = []
+                if new_art_regimen:
+                    art_regimen = [
+                        drug.strip()
+                        for drug in new_art_regimen.split(",")
+                        if drug.strip()
+                    ]
+
+                # Parse other medications (support both newline and comma-separated)
+                other_meds = []
+                if new_other_meds:
+                    other_meds_text = (new_other_meds or "").strip()
+                    # Try newline-separated first, then comma-separated
+                    if "\n" in other_meds_text:
+                        other_meds = [
+                            med.strip()
+                            for med in other_meds_text.split("\n")
+                            if med.strip()
+                        ]
+                    else:
+                        other_meds = [
+                            med.strip()
+                            for med in other_meds_text.split(",")
+                            if med.strip()
+                        ]
+
                 patient_record: Dict[str, Any] = {
                     "patient_id": pid,
-                    "name": pid,
-                    "art_regimen_current": [],
+                    "name": pname,
+                    "age_years": new_age if new_age is not None else None,
+                    "sex": new_sex if new_sex else None,
+                    "art_regimen_current": art_regimen,
+                    "other_medications": other_meds,
                     "visits": [],
                     "labs": {},
                     "today_encounter": {
                         "date": encounter_iso,
-                        # Rationale: the add-case form captures history only; the
-                        # clinician enters the current-day note after selecting the
-                        # patient from the list.
                         "note": "",
                         "orders": [],
                         "med_changes": [],
                     },
+                    "intake": {
+                        "complaints_symptoms": (new_complaints or "").strip(),
+                        "examination_findings": (new_exam_findings or "").strip(),
+                        "prior_history": (new_prior_history or "").strip(),
+                    },
                 }
 
-                prev_note = (new_prev_note or "").strip()
-                if prev_note:
+                # BACKWARD COMPATIBILITY: Concatenate structured fields into legacy visits[] format
+                # so existing code (build_patient_context, RAG, LLM prompts) continues to work
+                legacy_note_parts = []
+                if patient_record["intake"]["complaints_symptoms"]:
+                    legacy_note_parts.append(
+                        f"Complaints & Symptoms:\n{patient_record['intake']['complaints_symptoms']}"
+                    )
+                if patient_record["intake"]["examination_findings"]:
+                    legacy_note_parts.append(
+                        f"Examination Findings:\n{patient_record['intake']['examination_findings']}"
+                    )
+                if patient_record["intake"]["prior_history"]:
+                    legacy_note_parts.append(
+                        f"Prior History:\n{patient_record['intake']['prior_history']}"
+                    )
+
+                if legacy_note_parts:
                     patient_record["visits"].append(
                         {
                             "date": encounter_iso,
-                            "type": "routine",
-                            "clinician_note": prev_note,
+                            "type": "intake",
+                            "clinician_note": "\n\n".join(legacy_note_parts),
                         }
                     )
 
@@ -877,10 +966,134 @@ def main() -> None:
     selected_index = patient_labels.index(selected_label)
     patient = patients[selected_index]
 
+    # Display Patient Details/History in expandable section
+    with st.expander("Patient Details/History", expanded=False):
+        # Helper function to calculate regimen duration
+        def _calculate_regimen_duration(regimen_history):
+            if not regimen_history or len(regimen_history) == 0:
+                return None
+            current_regimen = regimen_history[-1]
+            start_date_str = current_regimen.get("start_date")
+            if not start_date_str:
+                return None
+            try:
+                from datetime import datetime
+                start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+                today = datetime.now()
+                years = (today - start_date).days / 365.25
+                return years
+            except Exception:
+                return None
+
+        # Create 2-column layout for compact display
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Section 1: Patient Identifier & Visit Context
+            st.markdown("""
+                <div style='background-color: #E8F4F8; padding: 15px; border-radius: 8px; border-left: 4px solid #2E86AB; margin-bottom: 15px;'>
+                    <h4 style='color: #2E86AB; margin-top: 0;'>1. Patient Identifier & Visit Context</h4>
+                </div>
+            """, unsafe_allow_html=True)
+            st.markdown(f"**ID Number:** {patient.get('patient_id', 'Not recorded')}")
+            age = patient.get('age_years')
+            st.markdown(f"**Age:** {age if age is not None else 'Not recorded'}")
+            sex = patient.get('sex')
+            st.markdown(f"**Sex:** {sex if sex else 'Not recorded'}")
+            visit_date = patient.get('today_encounter', {}).get('date', 'Not recorded')
+            st.markdown(f"**Visit Date:** {visit_date}")
+            st.markdown(f"**Visit Type:** Routine")
+            st.markdown("")
+
+            # Section 2: Current ART Regimen
+            st.markdown("""
+                <div style='background-color: #E8F4F8; padding: 15px; border-radius: 8px; border-left: 4px solid #2E86AB; margin-bottom: 15px;'>
+                    <h4 style='color: #2E86AB; margin-top: 0;'>2. Current ART Regimen</h4>
+                </div>
+            """, unsafe_allow_html=True)
+            art_regimen = patient.get('art_regimen_current', [])
+            if art_regimen:
+                regimen_str = ", ".join(art_regimen)
+                st.markdown(f"**Regimen:** <span style='color: #2E86AB; font-weight: 600;'>{regimen_str}</span>", unsafe_allow_html=True)
+                
+                # Calculate duration if regimen_history exists
+                regimen_history = patient.get('regimen_history', [])
+                duration_years = _calculate_regimen_duration(regimen_history)
+                if duration_years is not None:
+                    st.markdown(f"**Duration:** {duration_years:.1f} years (since {regimen_history[-1].get('start_date', 'unknown')})")
+                else:
+                    st.markdown("**Duration:** Not recorded")
+                
+                # Show previous regimens if available
+                if regimen_history and len(regimen_history) > 1:
+                    prev_regimens = []
+                    for i, reg in enumerate(regimen_history[:-1]):
+                        reg_str = ", ".join(reg.get('regimen', []))
+                        start = reg.get('start_date', 'unknown')
+                        end = reg.get('end_date', 'ongoing')
+                        prev_regimens.append(f"{reg_str} ({start} to {end})")
+                    st.markdown(f"**Previous regimens:** {'; '.join(prev_regimens)}")
+            else:
+                st.markdown("**Regimen:** None recorded")
+            st.markdown("")
+
+            # Section 3: Other Medications
+            st.markdown("""
+                <div style='background-color: #F0F8F0; padding: 15px; border-radius: 8px; border-left: 4px solid #52B788; margin-bottom: 15px;'>
+                    <h4 style='color: #52B788; margin-top: 0;'>3. Other Medications</h4>
+                </div>
+            """, unsafe_allow_html=True)
+            other_meds = patient.get('other_medications', [])
+            if other_meds:
+                for med in other_meds:
+                    st.markdown(f"- {med}")
+            else:
+                st.markdown("None recorded")
+
+        with col2:
+            # Section 4: Complaints & Symptoms
+            st.markdown("""
+                <div style='background-color: #FFF4E6; padding: 15px; border-radius: 8px; border-left: 4px solid #F4A261; margin-bottom: 15px;'>
+                    <h4 style='color: #E76F51; margin-top: 0;'>4. Complaints & Symptoms</h4>
+                </div>
+            """, unsafe_allow_html=True)
+            intake = patient.get('intake', {})
+            complaints = intake.get('complaints_symptoms', '').strip()
+            if complaints:
+                st.markdown(complaints)
+            else:
+                st.markdown("None recorded")
+            st.markdown("")
+
+            # Section 5: Examination Findings
+            st.markdown("""
+                <div style='background-color: #F0F8F0; padding: 15px; border-radius: 8px; border-left: 4px solid #52B788; margin-bottom: 15px;'>
+                    <h4 style='color: #52B788; margin-top: 0;'>5. Examination Findings</h4>
+                </div>
+            """, unsafe_allow_html=True)
+            exam_findings = intake.get('examination_findings', '').strip()
+            if exam_findings:
+                st.markdown(exam_findings)
+            else:
+                st.markdown("None recorded")
+            st.markdown("")
+
+            # Section 6: Prior History
+            st.markdown("""
+                <div style='background-color: #F5F0FF; padding: 15px; border-radius: 8px; border-left: 4px solid #7B68AB; margin-bottom: 15px;'>
+                    <h4 style='color: #7B68AB; margin-top: 0;'>6. Prior History</h4>
+                </div>
+            """, unsafe_allow_html=True)
+            prior_history = intake.get('prior_history', '').strip()
+            if prior_history:
+                st.markdown(prior_history)
+            else:
+                st.markdown("None recorded")
+
     today_note_default = (patient.get("today_encounter", {}) or {}).get("note") or ""
     # Rationale: key by patient_id so switching patients shows the correct note input.
     today_note = st.text_area(
-        "Today's encounter note",
+        "Clinician's Assessment & Plan",
         value=today_note_default,
         height=140,
         key=f"today_note_{patient.get('patient_id')}",
@@ -1239,6 +1452,79 @@ def main() -> None:
                         height=80,
                     )
 
+    # Trial Result - Experimental formatted output display
+    if alerts and st.session_state.get("analysis_ran"):
+        with st.expander("🧪 Trial Result (Experimental Format)", expanded=False):
+            st.caption("Experimental display format for alert output")
+            
+            # Get first alert for demonstration
+            if st.session_state.get("analysis_results"):
+                first_result = st.session_state["analysis_results"][0]
+                alert = first_result["alert"]
+                explanation = first_result["explanation"]
+                
+                # Red header with alert title
+                st.markdown(f"""
+                    <div style='background-color: #DC3545; color: white; padding: 15px; border-radius: 8px 8px 0 0; margin-bottom: 0;'>
+                        <h3 style='margin: 0; display: flex; align-items: center;'>
+                            <span style='font-size: 24px; margin-right: 10px;'>⚠</span>
+                            ACTION REQUIRED — {alert.title}
+                        </h3>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # Finding section
+                st.markdown(f"""
+                    <div style='background-color: white; padding: 20px; border-left: 4px solid #DC3545; margin-bottom: 15px;'>
+                        <p style='margin: 0;'><strong>Finding:</strong> {alert.message}</p>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # Most likely cause section (yellow background)
+                st.markdown(f"""
+                    <div style='background-color: #FFF9E6; padding: 20px; border-radius: 8px; border-left: 4px solid #FFC107; margin-bottom: 15px;'>
+                        <p style='margin: 0;'><strong style='color: #856404;'>Most likely cause:</strong> {explanation.text[:200]}...</p>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # Recommended Actions section (green border)
+                st.markdown("""
+                    <div style='background-color: #F0F8F0; padding: 20px; border-radius: 8px; border-left: 4px solid #52B788; margin-bottom: 15px;'>
+                        <h4 style='color: #52B788; margin-top: 0;'>Recommended Actions:</h4>
+                        <ol style='margin: 0; padding-left: 20px;'>
+                            <li><strong>Review guideline recommendations</strong> — Check retrieved guideline excerpts</li>
+                            <li><strong>Assess patient status</strong> — Evaluate current clinical condition</li>
+                            <li><strong>Consider intervention</strong> — Based on guideline recommendations</li>
+                            <li><strong>Document decision</strong> — Record clinical reasoning</li>
+                        </ol>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # Clinician's plan section
+                action = st.session_state.get(f"alert_action_{alert.alert_id}", "Unreviewed")
+                override_reason = st.session_state.get(f"alert_override_reason_{alert.alert_id}", "")
+                override_comment = st.session_state.get(f"alert_override_comment_{alert.alert_id}", "")
+                
+                plan_text = f"Action: {action}"
+                if override_reason:
+                    plan_text += f" (Reason: {override_reason})"
+                if override_comment:
+                    plan_text += f" — {override_comment}"
+                
+                st.markdown(f"""
+                    <div style='background-color: white; padding: 15px; border-left: 4px solid #6C757D; margin-bottom: 15px;'>
+                        <p style='margin: 0;'><strong>Clinician's plan:</strong> {plan_text}</p>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # Gap section (if override or specific conditions)
+                if action == "Override":
+                    st.markdown(f"""
+                        <div style='background-color: white; padding: 15px; border-left: 4px solid #DC3545;'>
+                            <p style='margin: 0;'><span style='color: #DC3545;'>⚠ Gap:</span> Alert overridden. Ensure clinical reasoning is documented and guideline recommendations are considered.</p>
+                        </div>
+                    """, unsafe_allow_html=True)
+
     can_finalize = _can_finalize(alerts)
     if st.button("Finalize / Close visit", disabled=not can_finalize):
         st.session_state["finalized"] = True
@@ -1248,8 +1534,12 @@ def main() -> None:
     elif st.session_state.get("analysis_ran") and alerts and not can_finalize:
         st.info("Finalize is disabled until all alerts are acknowledged or overridden with a reason.")
 
-    st.subheader("Status")
-    st.info("Workflow active: Save runs checks; Finalize requires review.")
+    st.markdown("""
+        <div style='background-color: #E8F4F8; padding: 15px; border-radius: 8px; border-left: 4px solid #2E86AB; margin: 20px 0;'>
+            <h3 style='color: #2E86AB; margin-top: 0;'>Status</h3>
+            <p style='margin-bottom: 0;'>Workflow active: Save runs checks; Finalize requires review.</p>
+        </div>
+    """, unsafe_allow_html=True)
 
     with st.expander("Candidate deterministic rules (from LLM screening)", expanded=False):
         rules = _load_candidate_rules(CANDIDATE_RULES_PATH)
@@ -1260,6 +1550,23 @@ def main() -> None:
             )
         else:
             st.json(rules)
+    
+    # Guidelines section moved to bottom
+    with st.expander("📚 Clinical Guidelines Reference", expanded=False):
+        st.markdown("""
+            <div style='background-color: #F5F0FF; padding: 15px; border-radius: 8px; border-left: 4px solid #7B68AB;'>
+                <h4 style='color: #7B68AB; margin-top: 0;'>Guidelines Used</h4>
+            </div>
+        """, unsafe_allow_html=True)
+        if GUIDELINE_PATHS:
+            st.write("Using Markdown guideline files:")
+            for p in GUIDELINE_PATHS:
+                st.markdown(f"- `{p.name}`")
+            st.success(f"{len(GUIDELINE_PATHS)} guideline file(s) found.")
+        else:
+            st.error(
+                "Guidelines PDF not found. Place it under `Data/` as specified in `initial-prompt-template.md`."
+            )
 
 
 if __name__ == "__main__":
