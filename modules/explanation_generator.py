@@ -292,6 +292,8 @@ def _try_llm_explanation(
             "Only use the provided guideline excerpts as evidence. "
             "If information is missing, say so. "
             "If no excerpts are provided, say you cannot give guideline-grounded suggestions. "
+            # Rationale: prevent UI artifacts from models emitting HTML/escaped HTML/markdown.
+            "Return plain text only (no HTML/XML tags, no escaped HTML like &lt;...&gt;, no markdown). "
             "Always include at least one *quoted* guideline excerpt and a citation in the form (page=<page_number>, chunk_id=<chunk_id>) when excerpts are provided. "
             "Use suggestive language (e.g., 'Consider...')."
         ),

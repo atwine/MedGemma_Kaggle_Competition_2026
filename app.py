@@ -1330,7 +1330,8 @@ def main() -> None:
                 except Exception:
                     st.text(updated_plan_text)
 
-    if alerts:
+    # Clinician UI: hide the per-alert debug expanders. Keep available for debug mode only.
+    if agentic_enabled and alerts:
         for item in st.session_state.get("analysis_results", []):
             alert: Alert = item["alert"]
             retrieved: List[VectorSearchResult] = item["retrieved"]
@@ -1397,6 +1398,31 @@ def main() -> None:
                             _save_candidate_rules(CANDIDATE_RULES_PATH, existing_rules)
                             st.success("Marked as candidate deterministic rule (saved under Data/candidate_rules.json).")
 
+    # Trial Result - Experimental formatted output display
+    if alerts and st.session_state.get("analysis_ran"):
+        with st.expander("Output", expanded=False):
+            st.caption("Experimental display format for alert output")
+
+            analysis_results = st.session_state.get("analysis_results") or []
+            if analysis_results:
+                selected_alert_id = st.selectbox(
+                    "Select alert",
+                    [r["alert"].alert_id for r in analysis_results],
+                    format_func=lambda _id: next(
+                        (r["alert"].title for r in analysis_results if r["alert"].alert_id == _id),
+                        _id,
+                    ),
+                    key="output_selected_alert_id",
+                )
+
+                selected_result = next(
+                    (r for r in analysis_results if r["alert"].alert_id == selected_alert_id),
+                    analysis_results[0],
+                )
+
+                alert = selected_result["alert"]
+                explanation = selected_result["explanation"]
+
                 st.markdown("**Acknowledge / Override**")
                 st.radio(
                     "Action",
@@ -1423,17 +1449,6 @@ def main() -> None:
                         key=f"alert_override_comment_{alert.alert_id}",
                         height=80,
                     )
-
-    # Trial Result - Experimental formatted output display
-    if alerts and st.session_state.get("analysis_ran"):
-        with st.expander("🧪 Trial Result (Experimental Format)", expanded=False):
-            st.caption("Experimental display format for alert output")
-            
-            # Get first alert for demonstration
-            if st.session_state.get("analysis_results"):
-                first_result = st.session_state["analysis_results"][0]
-                alert = first_result["alert"]
-                explanation = first_result["explanation"]
                 
                 # Red header with alert title
                 st.markdown(f"""
