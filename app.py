@@ -1106,33 +1106,13 @@ def main() -> None:
             value="all-MiniLM-L6-v2",
         )
         top_k = st.slider("Top-K guideline chunks", min_value=1, max_value=10, value=10)
-        # Rationale: default to indexing all pages so Markdown tables/flowcharts are
-        # consistently embedded across the entire document set.
+        
+        # Backend: index and retrieve from all pages by default (no UI controls)
         index_max_pages: Optional[int] = None
-        index_pages_choice = st.selectbox(
-            "Index max pages",
-            options=["All"],
-            index=0,
-        )
-        index_max_pages = None
-
-        # Rationale: Stage 2 — optional retrieval filter by guideline page range.
         retrieval_page_range: Optional[tuple[int, int]] = None
-        retrieval_pages_choice = st.selectbox(
-            "Retrieval page range",
-            # Rationale: default to querying across all pages so no guideline
-            # content is unintentionally excluded.
-            options=["All"],
-            index=0,
-            help="Constrain RAG retrieval to specific guideline pages (uses chunk metadata).",
-        )
-        retrieval_page_range = None
-
-        st.checkbox(
-            "Enable Agentic RAG debug (experimental)",
-            key="agentic_ui_debug_enabled",
-            value=True,
-        )
+        
+        # Disable agentic debug UI for final presentation
+        st.session_state["agentic_ui_debug_enabled"] = False
 
     with st.expander("LLM settings", expanded=False):
         use_ollama = st.checkbox("Use Ollama for explanations (if available)", value=True)
@@ -1298,14 +1278,6 @@ def main() -> None:
         )
     else:
         st.warning(f"YELLOW: {len(alerts)} alert(s) to consider.")
-
-    # UX: Show the active retrieval page range to make bounds explicit for reviewers.
-    _active_range = st.session_state.get("analysis_retrieval_page_range")
-    if _active_range is None:
-        st.caption("Retrieval page range: All pages")
-    else:
-        lo, hi = _active_range
-        st.caption(f"Retrieval page range: pages {lo}–{hi}")
 
     agentic_enabled = st.session_state.get("agentic_debug_enabled", False)
     if agentic_enabled:
@@ -1480,44 +1452,123 @@ def main() -> None:
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # Most likely cause section (yellow background)
+                # Comprehensive text cleaning function
+                import re
+                
+                def clean_llm_text(text):
+                    """Clean LLM output by removing all technical artifacts and metadata."""
+                    if not text:
+                        return ""
+                    
+                    # Remove nested dictionary/JSON structures like 'key': 'value', 'key': value
+                    text = re.sub(r"'[^']+'\s*:\s*'[^']*'", '', text)
+                    text = re.sub(r"'[^']+'\s*:\s*[^,}\]]+", '', text)
+                    
+                    # Remove page references and chunk IDs
+                    text = re.sub(r'\(page[^)]+\)', '', text)
+                    text = re.sub(r'page[_\s]*number[:\s]*\d+', '', text, flags=re.IGNORECASE)
+                    text = re.sub(r'chunk[_\s]*id[:\s]*[^\s,]+', '', text, flags=re.IGNORECASE)
+                    text = re.sub(r'who_guidelines\.extraction[^\s,)]*', '', text)
+                    text = re.sub(r'hiv_guidelines[^\s,)]*', '', text)
+                    text = re.sub(r'__[a-z_]+__[a-z0-9_]+', '', text)
+                    
+                    # Remove common JSON/dict keys
+                    json_keys = ['issue_type', 'severity', 'recommended_action', 'citations', 'raw_issue', 
+                                'alert_id', 'title', 'message', 'type', 'page_number', 'chunk_id']
+                    for key in json_keys:
+                        text = re.sub(rf"'{key}':\s*", '', text, flags=re.IGNORECASE)
+                        text = re.sub(rf'{key}:\s*', '', text, flags=re.IGNORECASE)
+                    
+                    # Remove brackets, quotes, and other JSON artifacts
+                    text = re.sub(r'[{}\[\]"\']', '', text)
+                    
+                    # Remove HTML tags (regular, malformed/unclosed, and escaped).
+                    text = re.sub(r'<[^>]*>?', '', text)  # catches both <tag> and <tag (unclosed)
+                    text = re.sub(r'&lt;.*?&gt;', '', text, flags=re.IGNORECASE | re.DOTALL)
+                    text = text.replace('&lt;', '').replace('&gt;', '')
+                    # Catch any remaining bare closing-tag fragments the LLM emits as plain text.
+                    text = re.sub(r'</?\s*(ol|ul|div|li|p|span|h[1-6])\s*/?>?', '', text, flags=re.IGNORECASE)
+                    
+                    # Remove pipe separators used in categorization
+                    text = re.sub(r'\|', ' ', text)
+                    
+                    # Remove multiple commas and clean up punctuation
+                    text = re.sub(r',\s*,+', ',', text)
+                    text = re.sub(r',\s*\.', '.', text)
+                    
+                    # Clean up whitespace
+                    text = ' '.join(text.split())
+                    text = text.strip(' ,.')
+                    
+                    return text
+                
+                # Most likely cause section (yellow background) - cleaned
+                cause_text = clean_llm_text(explanation.text)
+                # Extract first substantial sentence as the cause
+                cause_sentences = [s.strip() for s in cause_text.split('.') if s.strip() and len(s.strip()) > 30]
+                cause_display = cause_sentences[0] + '.' if cause_sentences else cause_text[:200] + '...'
+                
                 st.markdown(f"""
                     <div style='background-color: #FFF9E6; padding: 20px; border-radius: 8px; border-left: 4px solid #FFC107; margin-bottom: 15px;'>
-                        <p style='margin: 0;'><strong style='color: #856404;'>Most likely cause:</strong> {explanation.text[:200]}...</p>
+                        <p style='margin: 0;'><strong style='color: #856404;'>Most likely cause:</strong> {cause_display}</p>
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # Recommended Actions section (green border)
-                st.markdown("""
+                # Extract recommendations from explanation text
+                explanation_cleaned = clean_llm_text(explanation.text)
+                explanation_lines = explanation_cleaned.split('.')
+                recommendations = []
+                
+                for line in explanation_lines:
+                    line_stripped = line.strip()
+                    # Look for action-oriented phrases
+                    if (line_stripped and len(line_stripped) > 20 and
+                        any(keyword in line_stripped.lower() for keyword in 
+                            ['should', 'recommend', 'consider', 'check', 'monitor', 'switch', 
+                             'stop', 'start', 'assess', 'review', 'ensure', 'investigate'])):
+                        
+                        # Further clean the line
+                        cleaned = clean_llm_text(line_stripped)
+                        
+                        # Skip if it's just metadata or too short
+                        if (cleaned and len(cleaned) > 25 and 
+                            not cleaned.lower().startswith(('page', 'the guideline', 'excerpt'))):
+                            recommendations.append(cleaned + '.')
+                
+                # If no recommendations found, try extracting from alert.evidence
+                if not recommendations and hasattr(alert, 'evidence') and isinstance(alert.evidence, dict):
+                    rec_action = alert.evidence.get('recommended_action', '')
+                    if rec_action:
+                        rec_cleaned = clean_llm_text(rec_action)
+                        if rec_cleaned:
+                            recommendations = [rec_cleaned]
+                
+                # Final fallback: extract key sentences from cleaned explanation
+                if not recommendations:
+                    sentences = [s.strip() for s in explanation_cleaned.split('.') if s.strip()]
+                    # Take sentences that are substantial and informative
+                    recommendations = [s + '.' for s in sentences[:3] if len(s) > 30]
+                
+                # Build the HTML for recommendations
+                rec_items = ""
+                for i, rec in enumerate(recommendations[:6], 1):  # Limit to 6 recommendations
+                    rec_cleaned = clean_llm_text(rec)
+                    # Skip segments that are only whitespace or tag-like noise after cleaning.
+                    if not rec_cleaned or len(rec_cleaned) < 10:
+                        continue
+                    rec_items += f"<li>{rec_cleaned}</li>\n"
+                
+                st.markdown(f"""
                     <div style='background-color: #F0F8F0; padding: 20px; border-radius: 8px; border-left: 4px solid #52B788; margin-bottom: 15px;'>
                         <h4 style='color: #52B788; margin-top: 0;'>Recommended Actions:</h4>
                         <ol style='margin: 0; padding-left: 20px;'>
-                            <li><strong>Review guideline recommendations</strong> — Check retrieved guideline excerpts</li>
-                            <li><strong>Assess patient status</strong> — Evaluate current clinical condition</li>
-                            <li><strong>Consider intervention</strong> — Based on guideline recommendations</li>
-                            <li><strong>Document decision</strong> — Record clinical reasoning</li>
+                            {rec_items}
                         </ol>
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # Clinician's plan section
-                action = st.session_state.get(f"alert_action_{alert.alert_id}", "Unreviewed")
-                override_reason = st.session_state.get(f"alert_override_reason_{alert.alert_id}", "")
-                override_comment = st.session_state.get(f"alert_override_comment_{alert.alert_id}", "")
-                
-                plan_text = f"Action: {action}"
-                if override_reason:
-                    plan_text += f" (Reason: {override_reason})"
-                if override_comment:
-                    plan_text += f" — {override_comment}"
-                
-                st.markdown(f"""
-                    <div style='background-color: white; padding: 15px; border-left: 4px solid #6C757D; margin-bottom: 15px;'>
-                        <p style='margin: 0;'><strong>Clinician's plan:</strong> {plan_text}</p>
-                    </div>
-                """, unsafe_allow_html=True)
-                
                 # Gap section (if override or specific conditions)
+                action = st.session_state.get(f"alert_action_{alert.alert_id}", "Unreviewed")
                 if action == "Override":
                     st.markdown(f"""
                         <div style='background-color: white; padding: 15px; border-left: 4px solid #DC3545;'>
@@ -1540,16 +1591,6 @@ def main() -> None:
             <p style='margin-bottom: 0;'>Workflow active: Save runs checks; Finalize requires review.</p>
         </div>
     """, unsafe_allow_html=True)
-
-    with st.expander("Candidate deterministic rules (from LLM screening)", expanded=False):
-        rules = _load_candidate_rules(CANDIDATE_RULES_PATH)
-        if not rules:
-            st.caption(
-                "No candidate rules have been marked yet. Use 'Mark as candidate deterministic rule' "
-                "on an LLM-screening alert to add one."
-            )
-        else:
-            st.json(rules)
     
     # Guidelines section moved to bottom
     with st.expander("📚 Clinical Guidelines Reference", expanded=False):
