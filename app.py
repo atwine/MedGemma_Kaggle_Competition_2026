@@ -24,6 +24,8 @@ from modules.alert_rules import Alert, run_alerts
 from modules.embedder import Embedder, EmbedderConfig
 import modules.explanation_generator as explanation_generator
 
+import html
+
 # Rationale: Streamlit can keep stale module objects across reruns. If a newer
 # export was added to `modules.explanation_generator`, force a reload only when
 # the expected symbol is missing.
@@ -1296,7 +1298,7 @@ def main() -> None:
             "Embedding model (SentenceTransformers)",
             value="all-MiniLM-L6-v2",
         )
-        top_k = st.slider("Top-K guideline chunks", min_value=1, max_value=10, value=10)
+        top_k = st.slider("Top-K guideline chunks", min_value=1, max_value=10, value=5)
         
         # Backend: index and retrieve from all pages by default (no UI controls)
         index_max_pages: Optional[int] = None
@@ -1343,7 +1345,7 @@ def main() -> None:
             "Context window (num_ctx)",
             min_value=1024,
             max_value=131072,
-            value=32000,
+            value=8192,
             step=1024,
         )
         st.session_state["llm_num_ctx"] = int(num_ctx)
@@ -1761,7 +1763,8 @@ def main() -> None:
                     # Skip segments that are only whitespace or tag-like noise after cleaning.
                     if not rec_cleaned or len(rec_cleaned) < 10:
                         continue
-                    rec_items += f"<li>{rec_cleaned}</li>\n"
+                    # rec_items += f"<li>{rec_cleaned}</li>\n"
+                    rec_items += f"<li>{html.escape(rec_cleaned)}</li>\n"
                 
                 st.markdown(f"""
                     <div style='background-color: #F0F8F0; padding: 20px; border-radius: 8px; border-left: 4px solid #52B788; margin-bottom: 15px;'>
@@ -1771,6 +1774,50 @@ def main() -> None:
                         </ol>
                     </div>
                 """, unsafe_allow_html=True)
+
+                # Rationale: highlight gaps between the clinician's plan and the guideline-grounded
+                # updated management plan (agentic output) in a clinician-friendly format.
+                gap_explanations: List[str] = []
+                try:
+                    agentic_result = st.session_state.get("agentic_debug_result")
+                    updated_plan_text = None
+                    if is_dataclass(agentic_result):
+                        updated_plan_text = getattr(agentic_result, "updated_management_plan_text", None)
+                        if updated_plan_text is None:
+                            dbg = getattr(agentic_result, "debug_info", None) or {}
+                            if isinstance(dbg, dict):
+                                updated_plan_text = dbg.get("updated_management_plan_text")
+
+                    if isinstance(updated_plan_text, str) and updated_plan_text.strip():
+                        obj = json.loads(updated_plan_text)
+                        problems = obj.get("problems") if isinstance(obj, dict) else None
+                        if isinstance(problems, list):
+                            for p in problems:
+                                if not isinstance(p, dict):
+                                    continue
+                                cp = p.get("clinician_plan_for_this_problem")
+                                if not isinstance(cp, dict):
+                                    continue
+                                decision = (cp.get("decision") or "").strip()
+                                if decision in {"Gap", "Not Addressed"}:
+                                    expl = (cp.get("explanation") or "").strip()
+                                    if expl:
+                                        gap_explanations.append(expl)
+                except Exception:
+                    gap_explanations = []
+
+                if gap_explanations:
+                    clinician_plan_text = (today_note or "").strip() or "No clinician plan entered."
+                    gap_html = "<br/>".join(html.escape(x) for x in gap_explanations[:3])
+                    st.markdown(
+                        f"""
+                        <div style='background-color: white; padding: 15px; border-left: 4px solid #DC3545; margin-bottom: 15px;'>
+                            <p style='margin: 0 0 8px 0;'><strong>Clinician's plan:</strong> {html.escape(clinician_plan_text)}</p>
+                            <p style='margin: 0;'><span style='color: #DC3545;'>⚠ Gap:</span> {gap_html}</p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
                 
                 # Gap section (if override or specific conditions)
                 action = st.session_state.get(f"alert_action_{alert.alert_id}", "Unreviewed")
