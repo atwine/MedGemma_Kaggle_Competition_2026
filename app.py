@@ -966,6 +966,10 @@ def main() -> None:
     selected_index = patient_labels.index(selected_label)
     patient = patients[selected_index]
 
+    selected_patient_id = str(patient.get("patient_id") or "")
+    custom_patient_ids = {str(p.get("patient_id") or "") for p in (custom_patients or [])}
+    can_delete_selected = bool(selected_patient_id) and selected_patient_id in custom_patient_ids
+
     # Display Patient Details/History in expandable section
     with st.expander("Patient Details/History", expanded=False):
         # Helper function to calculate regimen duration
@@ -1089,6 +1093,53 @@ def main() -> None:
                 st.markdown(prior_history)
             else:
                 st.markdown("None recorded")
+
+        # Rationale: clinicians may need to remove a custom test case and re-enter it.
+        with st.expander("Delete Record", expanded=False):
+            if not can_delete_selected:
+                st.caption(
+                    "Delete is available only for custom cases you added (stored in Data/custom_patients.json)."
+                )
+            if st.button(
+                "Delete patient",
+                key="delete_selected_patient",
+                disabled=not can_delete_selected,
+            ):
+                st.session_state["pending_delete_patient_id"] = selected_patient_id
+
+            if (
+                st.session_state.get("pending_delete_patient_id") == selected_patient_id
+                and can_delete_selected
+            ):
+                st.warning(
+                    "This will permanently delete the selected patient case and cannot be reversed."
+                )
+                _confirm_key = f"confirm_delete_patient_{selected_patient_id}"
+                _confirmed = st.checkbox(
+                    "I understand this cannot be reversed",
+                    key=_confirm_key,
+                )
+                if st.button(
+                    "Confirm delete",
+                    key=f"confirm_delete_{selected_patient_id}",
+                    disabled=not _confirmed,
+                ):
+                    custom_patients = [
+                        p
+                        for p in (custom_patients or [])
+                        if str(p.get("patient_id") or "") != selected_patient_id
+                    ]
+                    st.session_state["custom_patients"] = custom_patients
+                    _save_custom_patients(CUSTOM_PATIENTS_PATH, custom_patients)
+
+                    # Rationale: reset derived UI state that may reference the deleted patient.
+                    st.session_state["selected_patient_label"] = None
+                    st.session_state["analysis_ran"] = False
+                    st.session_state["analysis_results"] = []
+                    st.session_state["finalized"] = False
+                    st.session_state.pop("pending_delete_patient_id", None)
+                    st.success(f"Deleted patient case: {selected_patient_id}")
+                    st.rerun()
 
     today_note_default = (patient.get("today_encounter", {}) or {}).get("note") or ""
     # Rationale: key by patient_id so switching patients shows the correct note input.

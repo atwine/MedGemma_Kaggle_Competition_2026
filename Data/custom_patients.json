@@ -36,24 +36,5 @@
       "orders": [],
       "med_changes": []
     }
-  },
-  {
-    "patient_id": "P2.1",
-    "name": "P2.1",
-    "art_regimen_current": [],
-    "visits": [
-      {
-        "date": "2026-02-09",
-        "type": "routine",
-        "clinician_note": "Scenario Type\nTrue Positive - DTG-associated weight gain with emerging metabolic syndrome\n\nPresenting Complaint\n36-year-old woman presents for routine review. Mentions her clothes no longer fit and she has gained 'a lot of weight' since starting her current HIV medication. Also feels more tired than usual.\n\nCurrent ARV Regimen\nTDF/3TC/DTG (TLD) for 18 months.\n\nPrevious ARV Regimens\nTDF/3TC/EFV for 3 years prior to switch (switched due to persistent dizziness and vivid dreams on EFV).\n\nMedical History\nHIV diagnosed 2019. No diabetes or hypertension previously. Family history: mother has type 2 diabetes. No other medications.\n\nExamination Findings\nBP 138/88 mmHg (was 118/74 before TLD switch). Weight 82kg (was 65kg at TLD switch 18 months ago - gained 17kg). BMI 32.4 kg/m2 (was 25.6). Waist circumference 96cm. Acanthosis nigricans noted at neck and axillae. No peripheral oedema.\n\nLaboratory Results\nFasting glucose: 118 mg/dL (impaired, was 92 mg/dL pre-switch). HbA1c: 6.1% (pre-diabetic). Fasting lipids: Total cholesterol 228 mg/dL, LDL 148 mg/dL, HDL 38 mg/dL, Triglycerides 212 mg/dL. Creatinine: 0.9 mg/dL (normal). Viral load: <50 copies/mL. CD4: 612 cells/uL."
-      }
-    ],
-    "labs": {},
-    "today_encounter": {
-      "date": "2026-02-09",
-      "note": "",
-      "orders": [],
-      "med_changes": []
-    }
   }
 ]
