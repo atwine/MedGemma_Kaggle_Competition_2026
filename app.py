@@ -753,6 +753,27 @@ def main() -> None:
     st.set_page_config(page_title="HIV Clinical Nudge Engine", layout="wide")
     _init_session_state()
 
+    # Rationale: avoid modifying widget-backed session_state keys after widgets are
+    # instantiated. We clear the Add patient case form on the next rerun.
+    if st.session_state.pop("reset_add_case_form", False):
+        for _k in [
+            "new_case_patient_id",
+            "new_case_patient_name",
+            "new_case_age",
+            "new_case_sex",
+            "new_case_art_regimen",
+            "new_case_other_meds",
+            "new_case_complaints",
+            "new_case_exam_findings",
+            "new_case_prior_history",
+            "new_case_lab_results",
+        ]:
+            st.session_state.pop(_k, None)
+
+    _flash = st.session_state.pop("add_case_flash_success", None)
+    if isinstance(_flash, str) and _flash.strip():
+        st.success(_flash)
+
     st.title("HIV Clinical Nudge Engine")
     st.caption(
         "Decision support only. Clinician retains final authority. Synthetic data only."
@@ -847,6 +868,18 @@ def main() -> None:
             height=80
         )
 
+        st.caption("Optional: enter laboratory results (one result per line).")
+        new_lab_results = st.text_area(
+            "Laboratory Results",
+            key="new_case_lab_results",
+            height=120,
+            help=(
+                "Paste one result per line. Supported examples:\n"
+                "viral_load, 2025-10-01, 40\n"
+                "creatinine, 2024-10-01, 88"
+            ),
+        )
+
         if st.button("Add case to patient list"):
             pid = (new_patient_id or "").strip()
             pname = (new_patient_name or "").strip()
@@ -858,6 +891,107 @@ def main() -> None:
                 st.error("That Patient ID already exists in the current patient list.")
             else:
                 encounter_iso = datetime.date.today().isoformat()
+
+                def _parse_bulk_labs(raw_text: str) -> Dict[str, List[Dict[str, Any]]]:
+                    # Rationale: accept copy/paste and persist the same schema as Data/mock_patients.json.
+                    # Supported examples:
+                    # viral_load, 2025-10-01, 40
+                    # creatinine, 2024-10-01, 88
+                    # Narrative paste is also supported (e.g., "Creatinine: 1.4 mg/dL ... Viral load: <50").
+                    out: Dict[str, List[Dict[str, Any]]] = {}
+                    errors: List[str] = []
+                    narrative_lines: List[str] = []
+
+                    iso_date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+                    for idx, ln in enumerate((raw_text or "").splitlines(), start=1):
+                        s = (ln or "").strip()
+                        if not s:
+                            continue
+
+                        # Only treat as structured CSV if the 2nd token is a valid ISO date.
+                        parts = [p.strip() for p in s.split(",") if p.strip()]
+                        if len(parts) >= 3 and iso_date_re.match(parts[1] or ""):
+                            lab_raw, date_str, value_str = parts[0], parts[1], parts[2]
+                            try:
+                                datetime.date.fromisoformat(date_str)
+                            except Exception:
+                                errors.append(f"Labs: line {idx} has invalid date '{date_str}'")
+                                continue
+
+                            try:
+                                v = float(str(value_str).replace("<", "").replace(">", "").strip())
+                            except Exception:
+                                errors.append(
+                                    f"Labs: line {idx} has invalid numeric value '{value_str}'"
+                                )
+                                continue
+                            if v.is_integer():
+                                v = int(v)
+
+                            low = (lab_raw or "").strip().lower().replace(" ", "_")
+                            if low in {"viral_load", "viral", "vl"}:
+                                lab_name = "viral_load"
+                                value_key = "value_copies_per_ml"
+                            elif low in {"creatinine", "creat", "cr"}:
+                                lab_name = "creatinine"
+                                value_key = "value_umol_per_l"
+                            else:
+                                lab_name = re.sub(r"[^a-z0-9_]+", "_", low).strip("_") or low
+                                value_key = "value"
+
+                            out.setdefault(lab_name, []).append({"date": date_str, value_key: v})
+                            continue
+
+                        # Non-structured line: treat as narrative text; we'll extract key labs via regex below.
+                        narrative_lines.append(s)
+
+                    # If the user pasted narrative labs (single paragraph), extract key labs.
+                    if narrative_lines:
+                        narrative_text = " ".join(narrative_lines)
+
+                        # Rationale: when no explicit date is provided, default to encounter date so
+                        # downstream logic (days_since_lab, trend extraction) has a usable timestamp.
+                        default_date = encounter_iso
+
+                        # Creatinine: support mg/dL (convert to µmol/L) and raw numeric (assumed µmol/L).
+                        m = re.search(
+                            r"creatinine\s*[:=]\s*([<>]?\s*\d+(?:\.\d+)?)\s*(mg/dl)?",
+                            narrative_text,
+                            flags=re.IGNORECASE,
+                        )
+                        if m:
+                            val = float(m.group(1).replace("<", "").replace(">", "").strip())
+                            unit = (m.group(2) or "").strip().lower()
+                            if unit == "mg/dl":
+                                val = val * 88.4
+                            val_out: Any = int(val) if float(val).is_integer() else round(val, 2)
+                            out.setdefault("creatinine", []).append(
+                                {"date": default_date, "value_umol_per_l": val_out}
+                            )
+
+                        # Viral load: handle "<50" by storing numeric 50.
+                        m = re.search(
+                            r"viral\s*load\s*[:=]\s*([<>]?\s*\d+(?:\.\d+)?)",
+                            narrative_text,
+                            flags=re.IGNORECASE,
+                        )
+                        if m:
+                            val = float(m.group(1).replace("<", "").replace(">", "").strip())
+                            val_out: Any = int(val) if float(val).is_integer() else round(val, 2)
+                            out.setdefault("viral_load", []).append(
+                                {"date": default_date, "value_copies_per_ml": val_out}
+                            )
+
+                    if errors:
+                        raise ValueError("; ".join(errors))
+                    return out
+
+                try:
+                    labs_parsed = _parse_bulk_labs(new_lab_results)
+                except ValueError as exc:
+                    st.error(str(exc))
+                    st.stop()
 
                 # Parse ART regimen from comma-separated input
                 art_regimen = []
@@ -894,7 +1028,7 @@ def main() -> None:
                     "art_regimen_current": art_regimen,
                     "other_medications": other_meds,
                     "visits": [],
-                    "labs": {},
+                    "labs": labs_parsed,
                     "today_encounter": {
                         "date": encounter_iso,
                         "note": "",
@@ -941,7 +1075,10 @@ def main() -> None:
                 # Rationale: auto-select the newly added patient to make it clear
                 # the add succeeded.
                 st.session_state["selected_patient_label"] = f"{pid} - {patient_record['name']}"
-                st.success("Case added. Select it from the patient list below.")
+                # Rationale: clear the Add patient case form after success to allow rapid entry.
+                st.session_state["add_case_flash_success"] = "Case added."
+                st.session_state["reset_add_case_form"] = True
+                st.rerun()
 
     if custom_patients:
         # Rationale: keep demo patients first, then any manually-added cases.
@@ -1522,7 +1659,6 @@ def main() -> None:
                 """, unsafe_allow_html=True)
                 
                 # Comprehensive text cleaning function
-                import re
                 
                 def clean_llm_text(text):
                     """Clean LLM output by removing all technical artifacts and metadata."""

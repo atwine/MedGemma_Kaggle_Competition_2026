@@ -1,1 +1,47 @@
-[]
+[
+  {
+    "patient_id": "P005",
+    "name": "James Doe",
+    "age_years": 38,
+    "sex": "F",
+    "art_regimen_current": [
+      "TDF/3TC/DTG (TLD)"
+    ],
+    "other_medications": [
+      "AZT/3TC/NVP for 2 years (2018-2020)",
+      "switched to TLD in 2020 due to national guideline transition."
+    ],
+    "visits": [
+      {
+        "date": "2026-02-22",
+        "type": "intake",
+        "clinician_note": "Complaints & Symptoms:\n38-year-old woman presents for routine 6-monthly review. No specific complaints. Mentions mild fatigue over the past 2 months which she attributes to her busy work schedule.\n\nExamination Findings:\nBP 118/76 mmHg. Weight 64kg (stable). No peripheral oedema. No costovertebral angle tenderness. Otherwise unremarkable.\n\nPrior History:\nHIV diagnosed 2018. No diabetes, no hypertension. Adherence consistently >95% by pill count. No known allergies. Takes ibuprofen 400mg occasionally for headaches (approximately 2-3 times per week for the past 6 months due to work stress)."
+      }
+    ],
+    "labs": {
+      "creatinine": [
+        {
+          "date": "2026-02-22",
+          "value_umol_per_l": 123.76
+        }
+      ],
+      "viral_load": [
+        {
+          "date": "2026-02-22",
+          "value_copies_per_ml": 50
+        }
+      ]
+    },
+    "today_encounter": {
+      "date": "2026-02-22",
+      "note": "",
+      "orders": [],
+      "med_changes": []
+    },
+    "intake": {
+      "complaints_symptoms": "38-year-old woman presents for routine 6-monthly review. No specific complaints. Mentions mild fatigue over the past 2 months which she attributes to her busy work schedule.",
+      "examination_findings": "BP 118/76 mmHg. Weight 64kg (stable). No peripheral oedema. No costovertebral angle tenderness. Otherwise unremarkable.",
+      "prior_history": "HIV diagnosed 2018. No diabetes, no hypertension. Adherence consistently >95% by pill count. No known allergies. Takes ibuprofen 400mg occasionally for headaches (approximately 2-3 times per week for the past 6 months due to work stress)."
+    }
+  }
+]
