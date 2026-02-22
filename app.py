@@ -1133,7 +1133,10 @@ def main() -> None:
                     _save_custom_patients(CUSTOM_PATIENTS_PATH, custom_patients)
 
                     # Rationale: reset derived UI state that may reference the deleted patient.
-                    st.session_state["selected_patient_label"] = None
+                    # IMPORTANT: do not set selected_patient_label here; the selectbox widget
+                    # with key selected_patient_label has already been instantiated this run.
+                    # On rerun, the pre-selectbox guard will reset the selection if it no
+                    # longer exists in the patient list.
                     st.session_state["analysis_ran"] = False
                     st.session_state["analysis_results"] = []
                     st.session_state["finalized"] = False
