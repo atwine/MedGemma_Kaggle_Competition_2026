@@ -1304,10 +1304,10 @@ def main() -> None:
         index_max_pages: Optional[int] = None
         retrieval_page_range: Optional[tuple[int, int]] = None
         
-        # Agentic plan (experimental): enable UPDATED MANAGEMENT PLAN + debug expanders
+        # Agentic plan (experimental): enable ARTEMIS Review + debug expanders
         _agentic_ui_default = bool(st.session_state.get("agentic_ui_debug_enabled", False))
         agentic_ui_debug_enabled = st.checkbox(
-            "Enable agentic UPDATED MANAGEMENT PLAN (experimental)",
+            "Enable agentic ARTEMIS Review (experimental)",
             value=_agentic_ui_default,
             help=(
                 "When enabled, runs the agentic planner using the LLM to generate a consolidated "
@@ -1738,7 +1738,8 @@ def main() -> None:
                 plan_html_text = None
 
             if isinstance(obj, dict) and isinstance(plan_html_text, str) and plan_html_text.strip():
-                with st.expander("UPDATED MANAGEMENT PLAN (NEW)", expanded=True):
+                # Rationale: match clinician-facing naming used in the example output.
+                with st.expander("ARTEMIS Review.", expanded=True):
                     st.markdown(plan_html_text, unsafe_allow_html=True)
 
                     # Keep raw JSON available for reviewers behind a collapsed toggle.
@@ -2088,7 +2089,8 @@ def main() -> None:
                         plan_html_text = None
 
                     if isinstance(obj, dict) and isinstance(plan_html_text, str) and plan_html_text.strip():
-                        st.markdown("### UPDATED MANAGEMENT PLAN (NEW)")
+                        # Rationale: match clinician-facing naming used in the example output.
+                        st.markdown("### ARTEMIS Review.")
                         st.markdown(plan_html_text, unsafe_allow_html=True)
 
                         # Optional: raw JSON for reviewers (collapsed UI)
@@ -2423,7 +2425,8 @@ def main() -> None:
                 else:
                     # Minimal clinician note: avoid duplicating actions when a patient-level plan exists
                     st.markdown(
-                        "<div style='background:#E8F4F8;padding:12px;border-left:4px solid #2E86AB;border-radius:8px;margin-bottom:12px;'><em>Recommended actions are covered by the patient-level UPDATED MANAGEMENT PLAN (NEW) above.</em></div>",
+                        # Rationale: keep message, but use the updated clinician-facing plan name.
+                        "<div style='background:#E8F4F8;padding:12px;border-left:4px solid #2E86AB;border-radius:8px;margin-bottom:12px;'><em>Recommended actions are covered by the patient-level ARTEMIS Review. above.</em></div>",
                         unsafe_allow_html=True,
                     )
 
