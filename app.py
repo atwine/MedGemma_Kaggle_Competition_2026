@@ -1233,6 +1233,56 @@ def main() -> None:
             else:
                 st.markdown("None recorded")
 
+            # Section 7: Laboratory Results
+            # Rationale: lab results are saved under patient['labs'] but were not displayed in the UI.
+            st.markdown("""
+                <div style='background-color: #FFF9E6; padding: 15px; border-radius: 8px; border-left: 4px solid #FFC107; margin-bottom: 15px;'>
+                    <h4 style='color: #856404; margin-top: 0;'>7. Laboratory Results</h4>
+                </div>
+            """, unsafe_allow_html=True)
+            labs_raw = patient.get("labs") or {}
+            lab_lines: List[str] = []
+            if isinstance(labs_raw, dict):
+                for lab_name, entries in labs_raw.items():
+                    if not isinstance(entries, list) or not entries:
+                        continue
+
+                    parsed = []
+                    for e in entries:
+                        if not isinstance(e, dict):
+                            continue
+                        d_str = (e.get("date") or "").strip()
+                        if not d_str:
+                            continue
+                        try:
+                            d_obj = datetime.date.fromisoformat(d_str)
+                        except Exception:
+                            continue
+
+                        val = None
+                        for k, v in e.items():
+                            if k == "date":
+                                continue
+                            val = v
+                            break
+
+                        parsed.append((d_obj, d_str, val))
+
+                    if not parsed:
+                        continue
+                    parsed.sort(key=lambda x: x[0])
+                    tail = parsed[-3:]
+                    timeline = " → ".join(
+                        [f"{v if v is not None else '?'} ({ds})" for _, ds, v in tail]
+                    )
+                    label = str(lab_name).replace("_", " ").strip().title() or str(lab_name)
+                    lab_lines.append(f"- **{label}:** {timeline}")
+
+            if lab_lines:
+                st.markdown("\n".join(lab_lines))
+            else:
+                st.markdown("None recorded")
+
         # Rationale: clinicians may need to remove a custom test case and re-enter it.
         with st.expander("Delete Record", expanded=False):
             if not can_delete_selected:
