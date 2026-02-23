@@ -1654,9 +1654,103 @@ def main() -> None:
                 """, unsafe_allow_html=True)
                 
                 # Finding section
+                # Rationale: LLM screening messages may include technical citation fragments
+                # like [chunk_id: ..., page_number: ...]. Keep page, hide chunk_id.
+                finding_text = str(alert.message or "")
+                finding_text = re.sub(
+                    r"\[\s*chunk_id\s*:\s*[^\],]+\s*,\s*page_number\s*:\s*(\d+)\s*\]",
+                    r"(page=\1)",
+                    finding_text,
+                    flags=re.IGNORECASE,
+                )
+                finding_text = re.sub(
+                    r"\(page\s*=\s*(\d+)\s*,\s*chunk_id\s*=\s*[^\)]+\)",
+                    r"(page=\1)",
+                    finding_text,
+                    flags=re.IGNORECASE,
+                )
+                finding_text = re.sub(r"chunk[_\s]*id\s*[:=]\s*[^\s,\)\]]+", "", finding_text, flags=re.IGNORECASE)
+
+                # Rationale: replace inline page citations with numbered references for readability.
+                cited_pages: List[int] = []
+                try:
+                    raw_citations = (alert.evidence or {}).get("citations") or []
+                    if isinstance(raw_citations, list):
+                        for c in raw_citations:
+                            if isinstance(c, dict) and c.get("page_number") is not None:
+                                try:
+                                    cited_pages.append(int(c.get("page_number")))
+                                except Exception:
+                                    continue
+                except Exception:
+                    cited_pages = []
+                cited_pages_set = {p for p in cited_pages if isinstance(p, int)}
+
+                # Remove explicit page annotations from the Finding text; references appear below.
+                finding_text = re.sub(r"\(page\s*=\s*\d+\)", "", finding_text, flags=re.IGNORECASE)
+
+                refs: List[tuple[str, int]] = []
+                try:
+                    retrieved_for_alert = list(selected_result.get("retrieved") or [])
+                    for r in retrieved_for_alert:
+                        meta = getattr(r, "metadata", {}) or {}
+                        page = meta.get("page_number")
+                        if page is None:
+                            continue
+                        try:
+                            page_i = int(page)
+                        except Exception:
+                            continue
+                        if cited_pages_set and page_i not in cited_pages_set:
+                            continue
+                        src = meta.get("source_path")
+                        src_name = Path(str(src)).name if src else "Guidelines"
+                        key = (src_name, page_i)
+                        if key not in refs:
+                            refs.append(key)
+                    # Fallback: if we couldn't match cited pages, just list the first couple retrieved refs.
+                    if not refs:
+                        for r in retrieved_for_alert:
+                            meta = getattr(r, "metadata", {}) or {}
+                            page = meta.get("page_number")
+                            if page is None:
+                                continue
+                            try:
+                                page_i = int(page)
+                            except Exception:
+                                continue
+                            src = meta.get("source_path")
+                            src_name = Path(str(src)).name if src else "Guidelines"
+                            key = (src_name, page_i)
+                            if key not in refs:
+                                refs.append(key)
+                            if len(refs) >= 2:
+                                break
+                except Exception:
+                    refs = []
+
+                ref_markers = "".join(f"[{i}]" for i in range(1, len(refs) + 1))
+                finding_display = html.escape(" ".join(finding_text.split()))
+                if ref_markers:
+                    finding_display = f"{finding_display} {html.escape(ref_markers)}"
+
+                refs_html = ""
+                if refs:
+                    items = "".join(
+                        f"<li>{html.escape(src)}, p.{int(page)}</li>" for src, page in refs
+                    )
+                    refs_html = (
+                        "<div style='margin-top: 8px; color: #555; font-size: 0.95em;'>"
+                        "<strong>References:</strong>"
+                        "<ol style='margin: 6px 0 0 18px; padding: 0;'>"
+                        f"{items}"
+                        "</ol>"
+                        "</div>"
+                    )
                 st.markdown(f"""
                     <div style='background-color: white; padding: 20px; border-left: 4px solid #DC3545; margin-bottom: 15px;'>
-                        <p style='margin: 0;'><strong>Finding:</strong> {alert.message}</p>
+                        <p style='margin: 0;'><strong>Finding:</strong> {finding_display}</p>
+                        {refs_html}
                     </div>
                 """, unsafe_allow_html=True)
                 

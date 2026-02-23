@@ -190,6 +190,9 @@ def generate_llm_screening_alerts(
         
         Return ONLY a valid JSON array (no markdown, no prose, no code fences).
         Use double quotes for all JSON strings.
+
+        - Do NOT include chunk_id or page_number/chunk_id annotations inside the "message" or "recommended_action" fields.
+          Put citation metadata ONLY inside the "citations" array.
         
         **Citations are mandatory for any guideline-supported issue.**
         - If issue_type != "information_gap": citations MUST be a non-empty array.

@@ -129,15 +129,15 @@ def generate_explanation(
             retrieved_chunks=used_chunks,
         )
         if llm_text:
-            # Rationale: guarantee at least one citation appears when chunks exist. If the
-            # model omitted a (page=..., chunk_id=...) citation, append a deterministic
-            # citations block derived from used_chunks for auditability.
-            if used_chunks and (("(page=" not in llm_text) or ("chunk_id=" not in llm_text)):
+            # Rationale: guarantee at least one page citation appears when chunks exist.
+            # We keep chunk_id traceability in the retrieved metadata, but avoid showing it
+            # in clinician-facing text.
+            if used_chunks and ("(page=" not in llm_text):
                 citations_lines: List[str] = []
                 for c in used_chunks:
                     page = c.metadata.get("page_number")
                     excerpt = (c.document or "")[:200]
-                    citations_lines.append(f'- "{excerpt}" (page={page}, chunk_id={c.chunk_id})')
+                    citations_lines.append(f'- "{excerpt}" (page={page})')
                 llm_text = llm_text + "\n\nCitations:\n" + "\n".join(citations_lines)
             return ExplanationResult(text=llm_text, used_chunks=used_chunks, used_llm=True)
 
@@ -279,9 +279,9 @@ def _try_llm_explanation(
     for c in retrieved_chunks:
         page = c.metadata.get("page_number")
         excerpt = (c.document or "")[:600]
-        chunks_block_lines.append(
-            f"[chunk_id={c.chunk_id} page={page} distance={c.distance:.4f}] {excerpt}"
-        )
+        # Rationale: keep citations readable by exposing page only (no chunk_id) in the
+        # text the model sees; chunk_id remains available in VectorSearchResult metadata.
+        chunks_block_lines.append(f"[page={page}] {excerpt}")
 
     chunks_block = "\n\n".join(chunks_block_lines) if chunks_block_lines else "(no chunks)"
 
@@ -294,7 +294,7 @@ def _try_llm_explanation(
             "If no excerpts are provided, say you cannot give guideline-grounded suggestions. "
             # Rationale: prevent UI artifacts from models emitting HTML/escaped HTML/markdown.
             "Return plain text only (no HTML/XML tags, no escaped HTML like &lt;...&gt;, no markdown). "
-            "Always include at least one *quoted* guideline excerpt and a citation in the form (page=<page_number>, chunk_id=<chunk_id>) when excerpts are provided. "
+            "Always include at least one *quoted* guideline excerpt and a citation in the form (page=<page_number>) when excerpts are provided. "
             "Use suggestive language (e.g., 'Consider...')."
         ),
     }
@@ -315,7 +315,7 @@ def _try_llm_explanation(
             "2) Plausible reasons / considerations (only if supported by excerpts; otherwise say 'Not specified in excerpts')\n"
             "3) Questions to ask / next steps (grounded in excerpts)\n"
             "4) Suggested urgency / timeframe (only if supported by excerpts; otherwise say 'Not specified in excerpts')\n"
-            "5) Citations: include at least one *quoted* excerpt with (page=<page_number>, chunk_id=<chunk_id>) when excerpts are provided"
+            "5) Citations: include at least one *quoted* excerpt with (page=<page_number>) when excerpts are provided"
         ),
     }
 
@@ -384,7 +384,8 @@ def _fallback_explanation(
         for c in retrieved_chunks:
             page = c.metadata.get("page_number")
             excerpt = (c.document or "")[:350]
-            lines.append(f"- (page={page}, chunk_id={c.chunk_id}) {excerpt}")
+            # Rationale: clinician-facing fallback output should not include chunk_id.
+            lines.append(f"- (page={page}) {excerpt}")
     else:
         lines.append("\nGuideline excerpts: none retrieved")
 
