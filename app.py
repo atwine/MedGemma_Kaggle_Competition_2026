@@ -2019,17 +2019,21 @@ def main() -> None:
 
                                 if decision in {"Gap", "Not Addressed"}:
                                     prefix = "➕ ADD"
+                                    status_label = "Not in your plan"
                                     line = f"<strong>Consider adding:</strong> {action}"
                                 elif decision == "Disagree":
                                     prefix = "🔄 REVIEW"
+                                    status_label = "Needs review"
                                     line = f"<strong>Consider instead:</strong> {action}"
                                 else:
                                     prefix = "✅ AGREE"
+                                    status_label = "Matches your plan"
                                     line = f"<strong>Agree:</strong> {action}"
 
                                 items.append(
-                                    "<li style='margin-bottom:6px;'>"
-                                    f"<span style='margin-right:6px;'>{prefix}</span> {line}"
+                                    "<li style='margin-bottom:8px;'>"
+                                    f"<div><span style='margin-right:6px;'>{prefix}</span> {line}</div>"
+                                    f"<div style='color:#444;font-size:12px;margin-top:2px;'><em>{_safe(status_label)}</em></div>"
                                     f"<div style='color:#555;font-size:12px;margin-top:2px;'>Reason: {reason}</div>"
                                     "</li>"
                                 )
@@ -2037,7 +2041,7 @@ def main() -> None:
                             if items:
                                 plan_html += [
                                     "<div style='background-color:#F0F8F0;padding:14px;border-left:4px solid #52B788;border-radius:8px;margin-bottom:12px;'>",
-                                    "<h4 style='color:#1B5E20;margin:0 0 8px 0;'>Recommended Actions</h4>",
+                                    "<h4 style='color:#1B5E20;margin:0 0 8px 0;'>Suggested Management Plan</h4>",
                                     "<ol style='margin:0;padding-left:18px;'>" + "".join(items) + "</ol>",
                                     "</div>",
                                 ]
@@ -2272,6 +2276,22 @@ def main() -> None:
                         <p style='margin: 0;'><strong style='color: #856404;'>Most likely cause:</strong> {cause_display}</p>
                     </div>
                 """, unsafe_allow_html=True)
+
+                # Rationale: provide a short "because" paragraph separate from the cause headline.
+                rationale_display = ""
+                if len(cause_sentences) >= 2:
+                    rationale_display = cause_sentences[1] + "."
+                    if len(cause_sentences) >= 3:
+                        rationale_display = rationale_display + " " + cause_sentences[2] + "."
+                if rationale_display.strip():
+                    st.markdown(
+                        f"""
+                        <div style='background-color: white; padding: 15px; border-radius: 8px; border-left: 4px solid #FFC107; margin-bottom: 15px;'>
+                            <p style='margin: 0;'><strong style='color: #856404;'>Rationale:</strong> {html.escape(rationale_display.strip())}</p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
                 
                 # Extract recommendations from explanation text
                 explanation_raw = explanation.text or ""
@@ -2394,7 +2414,7 @@ def main() -> None:
 
                     st.markdown(f"""
                         <div style='background-color: #F0F8F0; padding: 20px; border-radius: 8px; border-left: 4px solid #52B788; margin-bottom: 15px;'>
-                            <h4 style='color: #52B788; margin-top: 0;'>Recommended Actions:</h4>
+                            <h4 style='color: #52B788; margin-top: 0;'>Suggested Management Plan:</h4>
                             <ol style='margin: 0; padding-left: 20px;'>
                                 {rec_items}
                             </ol>
