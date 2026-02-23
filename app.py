@@ -1304,8 +1304,17 @@ def main() -> None:
         index_max_pages: Optional[int] = None
         retrieval_page_range: Optional[tuple[int, int]] = None
         
-        # Disable agentic debug UI for final presentation
-        st.session_state["agentic_ui_debug_enabled"] = False
+        # Agentic plan (experimental): enable UPDATED MANAGEMENT PLAN + debug expanders
+        _agentic_ui_default = bool(st.session_state.get("agentic_ui_debug_enabled", False))
+        agentic_ui_debug_enabled = st.checkbox(
+            "Enable agentic UPDATED MANAGEMENT PLAN (experimental)",
+            value=_agentic_ui_default,
+            help=(
+                "When enabled, runs the agentic planner using the LLM to generate a consolidated "
+                "patient-level management plan (JSON) and related debug info. Requires 'Use Ollama' above."
+            ),
+        )
+        st.session_state["agentic_ui_debug_enabled"] = bool(agentic_ui_debug_enabled)
 
     with st.expander("LLM settings", expanded=False):
         use_ollama = st.checkbox("Use Ollama for explanations (if available)", value=True)
@@ -1472,8 +1481,16 @@ def main() -> None:
     else:
         st.warning(f"YELLOW: {len(alerts)} alert(s) to consider.")
 
-    agentic_enabled = st.session_state.get("agentic_debug_enabled", False)
-    if agentic_enabled:
+    # Rationale: use the live checkbox key ("agentic_ui_debug_enabled") so the plan
+    # expanders render as soon as the checkbox is ticked, not only after a new run.
+    agentic_enabled = bool(
+        st.session_state.get("agentic_ui_debug_enabled", False)
+        or st.session_state.get("agentic_debug_enabled", False)
+    )
+    # Rationale: this section is troubleshooting-only and does not help clinicians.
+    # Show it only when explicitly enabled via the debug flag.
+    _agentic_debug_visible = (os.getenv("AGENTIC_RAG_DEBUG") or "").strip() == "1"
+    if agentic_enabled and _agentic_debug_visible:
         with st.expander("Agentic RAG debug (experimental)", expanded=False):
             agentic_result = st.session_state.get("agentic_debug_result")
             agentic_reasoner = st.session_state.get("agentic_debug_reasoner")
@@ -1500,9 +1517,9 @@ def main() -> None:
                 else:
                     st.caption("No reasoner snapshot captured.")
 
-    # Rationale: surface the new Part 3 "UPDATED MANAGEMENT PLAN" output in the
-    # main Results flow (before alert review actions) so it is easy to find.
-    if agentic_enabled:
+    # Rationale: the UPDATED MANAGEMENT PLAN is rendered under the single "Output" section
+    # to avoid duplicating the same content in multiple expanders.
+    if False and agentic_enabled:
         agentic_result = st.session_state.get("agentic_debug_result")
         updated_plan_text = None
         try:
@@ -1516,56 +1533,341 @@ def main() -> None:
             updated_plan_text = None
 
         if isinstance(updated_plan_text, str) and updated_plan_text.strip():
-            with st.expander("UPDATED MANAGEMENT PLAN (NEW)", expanded=True):
-                try:
-                    obj = json.loads(updated_plan_text)
-                    st.json(obj)
-                except Exception:
-                    st.text(updated_plan_text)
+            # Rationale: per clinician preference, hide the entire plan section unless we can
+            # render a clean, readable plan.
+            obj = None
+            plan_html_text = None
+            try:
+                # Rationale: LLM may return raw text with code fences or preamble;
+                # strip fences and extract the JSON object robustly before parsing.
+                _raw = updated_plan_text.strip()
+                if _raw.startswith("```"):
+                    _lines = _raw.splitlines()
+                    if _lines[0].strip().startswith("```"):
+                        _lines = _lines[1:]
+                    if _lines and _lines[-1].strip().startswith("```"):
+                        _lines = _lines[:-1]
+                    _raw = "\n".join(_lines).strip()
+                # If there's preamble before the JSON object, find the first '{'
+                _brace = _raw.find("{")
+                if _brace > 0:
+                    _raw = _raw[_brace:]
+                # Extract the first complete top-level JSON object using brace matching
+                _start = _raw.find("{")
+                if _start == -1:
+                    raise ValueError("No JSON object start '{' found in plan text")
+                _depth = 0
+                _in_str = False
+                _esc = False
+                _end = None
+                for _i in range(_start, len(_raw)):
+                    _ch = _raw[_i]
+                    if _in_str:
+                        if _esc:
+                            _esc = False
+                        elif _ch == "\\":
+                            _esc = True
+                        elif _ch == '"':
+                            _in_str = False
+                    else:
+                        if _ch == '"':
+                            _in_str = True
+                        elif _ch == '{':
+                            _depth += 1
+                        elif _ch == '}':
+                            _depth -= 1
+                            if _depth == 0:
+                                _end = _i + 1
+                                break
+                _slice = _raw[_start:_end] if _end is not None else _raw[_start:]
+                # Fallback: tolerate minor JSON formatting issues from LLM output
+                def _json_loads_relaxed(text: str):
+                    try:
+                        return json.loads(text)
+                    except Exception:
+                        t = text
+                        # 1) Remove trailing commas before closing } or ]
+                        t = re.sub(r',\s*([}\]])', r'\1', t)
+                        # 2a) Quote single-quoted keys if present
+                        t = re.sub(r"([\{\[,]\s*)'([^']+)'\s*:\s*", r'\1"\2": ', t)
+                        # 2b) Quote bareword keys (letters/underscore/hyphen) if unquoted
+                        t = re.sub(r'([\{\[,]\s*)([A-Za-z_][A-Za-z0-9_\-]*)\s*:', r'\1"\2":', t)
+                        # 2c) Quote known keys if unquoted (belt-and-suspenders for specific schema)
+                        keys_pat = r'(art_regimen_decision|problems|monitoring_plan|patient_counselling|decision|reason|action|problem|clinician_plan_for_this_problem|explanation)'
+                        t = re.sub(r'([\{,\[]\s*)' + keys_pat + r'\s*:', r'\1"\2":', t)
+                        # 3) Convert single-quoted string values to double quotes (simple heuristic)
+                        t = re.sub(r':\s*\'([^\']*)\'', r': "\1"', t)
+                        # 4) In arrays, convert 'item' to "item"
+                        t = re.sub(r'\[\s*\'([^\']*)\'', r'["\1"', t)
+                        t = re.sub(r',\s*\'([^\']*)\'', r', "\1"', t)
+                        return json.loads(t)
+                obj = _json_loads_relaxed(_slice)
 
-    # Clinician UI: hide the per-alert debug expanders. Keep available for debug mode only.
-    if agentic_enabled and alerts:
+                # Clinician-friendly rendering: mirror the cards used under Output.
+                def _badge(decision: str) -> str:
+                    d = (decision or "").strip().lower()
+                    if d == "switch":
+                        return "<span style='background:#FDECEA;color:#DC3545;padding:4px 8px;border:1px solid #DC3545;border-radius:12px;font-weight:600;'>Switch</span>"
+                    if d.startswith("hold"):
+                        return "<span style='background:#FFF9E6;color:#856404;padding:4px 8px;border:1px solid #FFC107;border-radius:12px;font-weight:600;'>Hold temporarily</span>"
+                    return "<span style='background:#F0F8F0;color:#1B5E20;padding:4px 8px;border:1px solid #52B788;border-radius:12px;font-weight:600;'>Continue</span>"
+
+                def _safe(v: str) -> str:
+                    return html.escape(str(v or "").strip())
+
+                plan_html = []
+
+                # 1) Regimen Decision
+                ard = obj.get("art_regimen_decision") or {}
+                ard_decision = str(ard.get("decision") or "").strip()
+                ard_reason = str(ard.get("reason") or "").strip()
+                plan_html += [
+                    "<div style='background:#FFFFFF;padding:14px;border-left:4px solid #2E86AB;margin-bottom:12px;border-radius:8px;'>",
+                    f"<div style='margin-bottom:6px;'>{_badge(ard_decision)} <strong style='margin-left:8px;'>ART regimen decision</strong></div>",
+                    f"<div style='color:#333;'>Reason: {_safe(ard_reason)}</div>",
+                    "</div>",
+                ]
+
+                # 2) Problems → Actions (Agree/Disagree/Gap/Not Addressed)
+                probs = obj.get("problems") or []
+                if isinstance(probs, list) and probs:
+                    items = []
+                    for p in probs[:12]:
+                        if not isinstance(p, dict):
+                            continue
+                        action = _safe(p.get("action"))
+                        reason = _safe(p.get("reason"))
+                        cp = p.get("clinician_plan_for_this_problem") or {}
+                        decision = str(cp.get("decision") or "").strip()
+
+                        if decision in {"Gap", "Not Addressed"}:
+                            prefix = "➕ ADD"
+                            line = f"<strong>Consider adding:</strong> {action}"
+                        elif decision == "Disagree":
+                            prefix = "🔄 REVIEW"
+                            line = f"<strong>Consider instead:</strong> {action}"
+                        else:
+                            prefix = "✅ AGREE"
+                            line = f"<strong>Agree:</strong> {action}"
+
+                        items.append(
+                            "<li style='margin-bottom:6px;'>"
+                            f"<span style='margin-right:6px;'>{prefix}</span> {line}"
+                            f"<div style='color:#555;font-size:12px;margin-top:2px;'>Reason: {reason}</div>"
+                            "</li>"
+                        )
+
+                    if items:
+                        plan_html += [
+                            "<div style='background-color:#F0F8F0;padding:14px;border-left:4px solid #52B788;border-radius:8px;margin-bottom:12px;'>",
+                            "<h4 style='color:#1B5E20;margin:0 0 8px 0;'>Recommended Actions</h4>",
+                            "<ol style='margin:0;padding-left:18px;'>" + "".join(items) + "</ol>",
+                            "</div>",
+                        ]
+
+                # 3) Monitoring Plan
+                mp = obj.get("monitoring_plan")
+                mp_items = []
+                if isinstance(mp, list):
+                    mp_items = [f"<li>{_safe(x)}</li>" for x in mp if str(x).strip()]
+                elif isinstance(mp, dict):
+                    for k, v in mp.items():
+                        if isinstance(v, (list, tuple)):
+                            for x in v:
+                                if str(x).strip():
+                                    mp_items.append(f"<li>{_safe(x)}</li>")
+                        elif str(v).strip():
+                            mp_items.append(f"<li>{_safe(v)}</li>")
+                elif isinstance(mp, str) and mp.strip():
+                    mp_items = [f"<li>{_safe(mp)}</li>"]
+
+                if mp_items:
+                    plan_html += [
+                        "<div style='background:#E8F4F8;padding:14px;border-left:4px solid #2E86AB;border-radius:8px;margin-bottom:12px;'>",
+                        "<h4 style='color:#2E86AB;margin:0 0 8px 0;'>Monitoring</h4>",
+                        "<ul style='margin:0;padding-left:18px;'>" + "".join(mp_items) + "</ul>",
+                        "</div>",
+                    ]
+
+                # 4) Patient Counselling
+                pc = obj.get("patient_counselling") or []
+                if isinstance(pc, list) and pc:
+                    pc_items = [f"<li>{_safe(x)}</li>" for x in pc if str(x).strip()]
+                    if pc_items:
+                        plan_html += [
+                            "<div style='background:#F5F0FF;padding:14px;border-left:4px solid #7B68AB;border-radius:8px;margin-bottom:12px;'>",
+                            "<h4 style='color:#7B68AB;margin:0 0 8px 0;'>Counselling</h4>",
+                            "<ul style='margin:0;padding-left:18px;'>" + "".join(pc_items) + "</ul>",
+                            "</div>",
+                        ]
+
+                # 5) References (optional)
+                refs = obj.get("references") or obj.get("citations")
+                if isinstance(refs, list):
+                    ref_items = []
+                    for r in refs:
+                        if isinstance(r, dict):
+                            src = _safe(r.get("source") or r.get("src") or r.get("source_path") or "Guidelines")
+                            page = r.get("page") or r.get("page_number")
+                            try:
+                                page_i = int(page) if page is not None else None
+                            except Exception:
+                                page_i = None
+                            if page_i is not None:
+                                ref_items.append(f"<li>{src}, p.{page_i}</li>")
+                            else:
+                                title = _safe(r.get("title") or "")
+                                text = f"{src}{(': ' + title) if title else ''}"
+                                ref_items.append(f"<li>{text}</li>")
+                        else:
+                            s = _safe(r)
+                            if s:
+                                ref_items.append(f"<li>{s}</li>")
+
+                    if ref_items:
+                        plan_html += [
+                            "<div style='background:#FAFAFA;padding:14px;border-left:4px solid #9E9E9E;border-radius:8px;margin-bottom:12px;'>",
+                            "<h4 style='color:#555;margin:0 0 8px 0;'>References</h4>",
+                            "<ol style='margin:0;padding-left:18px;'>" + "".join(ref_items) + "</ol>",
+                            "</div>",
+                        ]
+
+                plan_html_text = "\n".join(plan_html) if plan_html else None
+            except Exception:
+                obj = None
+                plan_html_text = None
+
+            if isinstance(obj, dict) and isinstance(plan_html_text, str) and plan_html_text.strip():
+                with st.expander("UPDATED MANAGEMENT PLAN (NEW)", expanded=True):
+                    st.markdown(plan_html_text, unsafe_allow_html=True)
+
+                    # Keep raw JSON available for reviewers behind a collapsed toggle.
+                    with st.expander("View raw plan JSON", expanded=False):
+                        st.json(obj)
+
+    # Rationale: per-alert expanders duplicate the selected alert view under "Output".
+    # Keep this block disabled so clinicians only see one consolidated Output.
+    if False and agentic_enabled and alerts:
         for item in st.session_state.get("analysis_results", []):
             alert: Alert = item["alert"]
             retrieved: List[VectorSearchResult] = item["retrieved"]
             explanation: ExplanationResult = item["explanation"]
 
             with st.expander(f"Alert: {alert.title}", expanded=True):
-                st.write(alert.message)
-                st.json(alert.evidence)
+                # Rationale: present clinician-facing text without inline citation fragments
+                # and keep numbered references in one place for readability.
+                _finding_text = str(alert.message or "")
+                _finding_text = re.sub(
+                    r"\[\s*chunk_id\s*:\s*[^\],]+\s*,\s*page_number\s*:\s*(\d+)\s*\]",
+                    "",
+                    _finding_text,
+                    flags=re.IGNORECASE,
+                )
+                _finding_text = re.sub(r"\(page\s*=\s*\d+\)", "", _finding_text, flags=re.IGNORECASE)
+                _finding_text = re.sub(
+                    r"chunk[_\s]*id\s*[:=]\s*[^\s,\)\]]+",
+                    "",
+                    _finding_text,
+                    flags=re.IGNORECASE,
+                )
 
-                st.markdown("**Guideline retrieval**")
+                _why_text = str(explanation.text or "")
+                _why_text = re.sub(
+                    r"\[\s*chunk_id\s*:\s*[^\],]+\s*,\s*page_number\s*:\s*(\d+)\s*\]",
+                    "",
+                    _why_text,
+                    flags=re.IGNORECASE,
+                )
+                _why_text = re.sub(r"\(page\s*=\s*\d+\)", "", _why_text, flags=re.IGNORECASE)
+                _why_text = re.sub(
+                    r"chunk[_\s]*id\s*[:=]\s*[^\s,\)\]]+",
+                    "",
+                    _why_text,
+                    flags=re.IGNORECASE,
+                )
+
+                # Rationale: some explanations include duplicated headings and large raw
+                # dictionaries; strip them so the main UI reads like a normal note.
+                _why_text = re.sub(r"^\s*why this alert\s*:\s*", "", _why_text, flags=re.IGNORECASE)
+                _why_text = re.split(r"\bpatient evidence\s*:\s*", _why_text, maxsplit=1, flags=re.IGNORECASE)[0]
+                _why_text = re.split(r"\bguideline excerpts\s*:\s*", _why_text, maxsplit=1, flags=re.IGNORECASE)[0]
+
+                # Rationale: build a single numbered reference list from evidence + retrieved pages.
+                _pages: List[int] = []
+                try:
+                    _cit = (alert.evidence or {}).get("citations") or []
+                    if isinstance(_cit, list):
+                        for c in _cit:
+                            if isinstance(c, dict) and c.get("page_number") is not None:
+                                try:
+                                    _pages.append(int(c.get("page_number")))
+                                except Exception:
+                                    continue
+                except Exception:
+                    _pages = []
                 if retrieved:
                     for r in retrieved:
-                        st.markdown(
-                            f"- page={r.metadata.get('page_number')} | distance={r.distance:.4f} | chunk_id={r.chunk_id}"
-                        )
-                else:
-                    st.write("No guideline chunks retrieved.")
+                        try:
+                            p = (getattr(r, "metadata", {}) or {}).get("page_number")
+                            if p is not None:
+                                _pages.append(int(p))
+                        except Exception:
+                            continue
+
+                # Rationale: keep compatible with older Python versions (avoid built-in generics like set[int]).
+                _seen_pages = set()
+                _ref_pages: List[int] = []
+                for p in _pages:
+                    if isinstance(p, int) and p not in _seen_pages:
+                        _seen_pages.add(p)
+                        _ref_pages.append(p)
+
+                st.markdown("**Finding**")
+                st.write(_finding_text.strip() or "-")
 
                 st.markdown("**Why this alert?**")
                 _is_checklist = (alert.evidence or {}).get("type") == "llm_audit_checklist"
-                if _is_checklist:
-                    # UX: checklist items are generated via a single LLM call; per‑alert explanations are skipped.
-                    st.caption("Checklist item generated by LLM (single-call mode). Per‑alert explanation is disabled in this mode.")
-                elif explanation.used_llm:
-                    st.caption("Generated with local LLM (Ollama) using retrieved excerpts.")
-                    # Rationale: show latency for per‑alert explanations when LLM was used.
-                    _elapsed = st.session_state.get(f"explain_time_{alert.alert_id}")
-                    if isinstance(_elapsed, (int, float)):
-                        st.caption(f"LLM time: {_elapsed:.2f}s")
-                else:
-                    if st.session_state.get("analysis_use_ollama"):
-                        st.caption("Deterministic fallback explanation (LLM unavailable).")
-                        model = st.session_state.get("analysis_ollama_model")
-                        err = st.session_state.get("analysis_ollama_error")
-                        if model:
-                            st.caption(f"Ollama model: {model}")
-                        if err:
-                            st.caption(f"Ollama debug: {err}")
+                st.write(_why_text.strip() or "-")
+
+                # Rationale: keep technical retrieval details available without cluttering the main view.
+                with st.expander("Details (debug)", expanded=False):
+                    # Rationale: keep references out of the main alert view; only show them in Details.
+                    if _ref_pages:
+                        st.markdown("**References**")
+                        st.markdown(
+                            "\n".join([f"{i+1}. Guidelines, p.{p}" for i, p in enumerate(_ref_pages)])
+                        )
+
+                    # Rationale: move generation status/latency out of the main clinician view.
+                    if _is_checklist:
+                        st.caption(
+                            "Checklist item generated by LLM (single-call mode). Per‑alert explanation is disabled in this mode."
+                        )
+                    elif explanation.used_llm:
+                        st.caption("Generated with local LLM (Ollama) using retrieved excerpts.")
+                        _elapsed = st.session_state.get(f"explain_time_{alert.alert_id}")
+                        if isinstance(_elapsed, (int, float)):
+                            st.caption(f"LLM time: {_elapsed:.2f}s")
                     else:
-                        st.caption("Deterministic fallback explanation (LLM disabled).")
-                st.write(explanation.text)
+                        if st.session_state.get("analysis_use_ollama"):
+                            st.caption("Deterministic fallback explanation (LLM unavailable).")
+                            model = st.session_state.get("analysis_ollama_model")
+                            err = st.session_state.get("analysis_ollama_error")
+                            if model:
+                                st.caption(f"Ollama model: {model}")
+                            if err:
+                                st.caption(f"Ollama debug: {err}")
+                        else:
+                            st.caption("Deterministic fallback explanation (LLM disabled).")
+
+                    st.markdown("**Guideline retrieval**")
+                    if retrieved:
+                        for r in retrieved:
+                            st.markdown(
+                                f"- page={r.metadata.get('page_number')} | distance={r.distance:.4f} | chunk_id={r.chunk_id}"
+                            )
+                    else:
+                        st.write("No guideline chunks retrieved.")
 
                 # Rationale: allow promoting useful LLM-screening issues into a
                 # candidate list for future deterministic rules without changing
@@ -1592,12 +1894,206 @@ def main() -> None:
                             st.success("Marked as candidate deterministic rule (saved under Data/candidate_rules.json).")
 
     # Trial Result - Experimental formatted output display
-    if alerts and st.session_state.get("analysis_ran"):
+    # Rationale: keep a single consolidated "Output" section even when there are no alerts,
+    # so the UPDATED MANAGEMENT PLAN can still be shown under Output.
+    if st.session_state.get("analysis_ran"):
         with st.expander("Output", expanded=False):
             st.caption("Experimental display format for alert output")
 
+            if agentic_enabled:
+                agentic_result = st.session_state.get("agentic_debug_result")
+                updated_plan_text = None
+                try:
+                    if is_dataclass(agentic_result):
+                        updated_plan_text = getattr(agentic_result, "updated_management_plan_text", None)
+                        if updated_plan_text is None:
+                            dbg = getattr(agentic_result, "debug_info", None) or {}
+                            if isinstance(dbg, dict):
+                                updated_plan_text = dbg.get("updated_management_plan_text")
+                except Exception:
+                    updated_plan_text = None
+
+                if isinstance(updated_plan_text, str) and updated_plan_text.strip():
+                    # Rationale: per clinician preference, hide the plan section unless we can
+                    # render a clean, readable plan.
+                    obj = None
+                    plan_html_text = None
+                    try:
+                        # Rationale: same robust JSON extraction as the standalone expander.
+                        _raw2 = updated_plan_text.strip()
+                        if _raw2.startswith("```"):
+                            _lines2 = _raw2.splitlines()
+                            if _lines2[0].strip().startswith("```"):
+                                _lines2 = _lines2[1:]
+                            if _lines2 and _lines2[-1].strip().startswith("```"):
+                                _lines2 = _lines2[:-1]
+                            _raw2 = "\n".join(_lines2).strip()
+                        _brace2 = _raw2.find("{")
+                        if _brace2 > 0:
+                            _raw2 = _raw2[_brace2:]
+                        # Extract the first complete top-level JSON object using brace matching
+                        _start2 = _raw2.find("{")
+                        if _start2 == -1:
+                            raise ValueError("No JSON object start '{' found in plan text")
+                        _depth2 = 0
+                        _in_str2 = False
+                        _esc2 = False
+                        _end2 = None
+                        for _j in range(_start2, len(_raw2)):
+                            _ch2 = _raw2[_j]
+                            if _in_str2:
+                                if _esc2:
+                                    _esc2 = False
+                                elif _ch2 == "\\":
+                                    _esc2 = True
+                                elif _ch2 == '"':
+                                    _in_str2 = False
+                            else:
+                                if _ch2 == '"':
+                                    _in_str2 = True
+                                elif _ch2 == '{':
+                                    _depth2 += 1
+                                elif _ch2 == '}':
+                                    _depth2 -= 1
+                                    if _depth2 == 0:
+                                        _end2 = _j + 1
+                                        break
+                        _slice2 = _raw2[_start2:_end2] if _end2 is not None else _raw2[_start2:]
+                        # Fallback: tolerate minor JSON formatting issues from LLM output
+                        def _json_loads_relaxed2(text: str):
+                            try:
+                                return json.loads(text)
+                            except Exception:
+                                t2 = text
+                                # 1) Remove trailing commas before closing } or ]
+                                t2 = re.sub(r',\s*([}\]])', r'\1', t2)
+                                # 2a) Quote single-quoted keys if present
+                                t2 = re.sub(r"([\{\[,]\s*)'([^']+)'\s*:\s*", r'\1"\2": ', t2)
+                                # 2b) Quote bareword keys (letters/underscore/hyphen) if unquoted
+                                t2 = re.sub(r'([\{\[,]\s*)([A-Za-z_][A-Za-z0-9_\-]*)\s*:', r'\1"\2":', t2)
+                                # 2c) Quote known keys if unquoted
+                                keys_pat2 = r'(art_regimen_decision|problems|monitoring_plan|patient_counselling|decision|reason|action|problem|clinician_plan_for_this_problem|explanation)'
+                                t2 = re.sub(r'([\{,\[]\s*)' + keys_pat2 + r'\s*:', r'\1"\2":', t2)
+                                # 3) Convert single-quoted string values to double quotes (simple heuristic)
+                                t2 = re.sub(r':\s*\'([^\']*)\'', r': "\1"', t2)
+                                # 4) In arrays, convert 'item' to "item"
+                                t2 = re.sub(r'\[\s*\'([^\']*)\'', r'["\1"', t2)
+                                t2 = re.sub(r',\s*\'([^\']*)\'', r', "\1"', t2)
+                                return json.loads(t2)
+                        obj = _json_loads_relaxed2(_slice2)
+
+                        # Render a clinician-friendly view (no raw JSON).
+                        def _badge(decision: str) -> str:
+                            d = (decision or "").strip().lower()
+                            if d == "switch":
+                                return "<span style='background:#FDECEA;color:#DC3545;padding:4px 8px;border:1px solid #DC3545;border-radius:12px;font-weight:600;'>Switch</span>"
+                            if d.startswith("hold"):
+                                return "<span style='background:#FFF9E6;color:#856404;padding:4px 8px;border:1px solid #FFC107;border-radius:12px;font-weight:600;'>Hold temporarily</span>"
+                            return "<span style='background:#F0F8F0;color:#1B5E20;padding:4px 8px;border:1px solid #52B788;border-radius:12px;font-weight:600;'>Continue</span>"
+
+                        def _safe(v: str) -> str:
+                            return html.escape(str(v or "").strip())
+
+                        # 1) Regimen Decision
+                        ard = obj.get("art_regimen_decision") or {}
+                        ard_decision = str(ard.get("decision") or "").strip()
+                        ard_reason = str(ard.get("reason") or "").strip()
+                        plan_html = [
+                            "<div style='background:#FFFFFF;padding:14px;border-left:4px solid #2E86AB;margin-bottom:12px;border-radius:8px;'>",
+                            f"<div style='margin-bottom:6px;'>{_badge(ard_decision)} <strong style='margin-left:8px;'>ART regimen decision</strong></div>",
+                            f"<div style='color:#333;'>Reason: {_safe(ard_reason)}</div>",
+                            "</div>",
+                        ]
+
+                        # 2) Problems → Actions (Agree/Disagree/Gap/Not Addressed)
+                        probs = obj.get("problems") or []
+                        if isinstance(probs, list) and probs:
+                            items = []
+                            for p in probs[:12]:
+                                if not isinstance(p, dict):
+                                    continue
+                                action = _safe(p.get("action"))
+                                reason = _safe(p.get("reason"))
+                                cp = p.get("clinician_plan_for_this_problem") or {}
+                                decision = str(cp.get("decision") or "").strip()
+
+                                if decision in {"Gap", "Not Addressed"}:
+                                    prefix = "➕ ADD"
+                                    line = f"<strong>Consider adding:</strong> {action}"
+                                elif decision == "Disagree":
+                                    prefix = "🔄 REVIEW"
+                                    line = f"<strong>Consider instead:</strong> {action}"
+                                else:
+                                    prefix = "✅ AGREE"
+                                    line = f"<strong>Agree:</strong> {action}"
+
+                                items.append(
+                                    "<li style='margin-bottom:6px;'>"
+                                    f"<span style='margin-right:6px;'>{prefix}</span> {line}"
+                                    f"<div style='color:#555;font-size:12px;margin-top:2px;'>Reason: {reason}</div>"
+                                    "</li>"
+                                )
+
+                            if items:
+                                plan_html += [
+                                    "<div style='background-color:#F0F8F0;padding:14px;border-left:4px solid #52B788;border-radius:8px;margin-bottom:12px;'>",
+                                    "<h4 style='color:#1B5E20;margin:0 0 8px 0;'>Recommended Actions</h4>",
+                                    "<ol style='margin:0;padding-left:18px;'>" + "".join(items) + "</ol>",
+                                    "</div>",
+                                ]
+
+                        # 3) Monitoring Plan
+                        mp = obj.get("monitoring_plan")
+                        mp_items = []
+                        if isinstance(mp, list):
+                            mp_items = [f"<li>{_safe(x)}</li>" for x in mp if str(x).strip()]
+                        elif isinstance(mp, dict):
+                            for k, v in mp.items():
+                                if isinstance(v, (list, tuple)):
+                                    for x in v:
+                                        if str(x).strip():
+                                            mp_items.append(f"<li>{_safe(x)}</li>")
+                                elif str(v).strip():
+                                    mp_items.append(f"<li>{_safe(v)}</li>")
+                        elif isinstance(mp, str) and mp.strip():
+                            mp_items = [f"<li>{_safe(mp)}</li>"]
+
+                        if mp_items:
+                            plan_html += [
+                                "<div style='background:#E8F4F8;padding:14px;border-left:4px solid #2E86AB;border-radius:8px;margin-bottom:12px;'>",
+                                "<h4 style='color:#2E86AB;margin:0 0 8px 0;'>Monitoring</h4>",
+                                "<ul style='margin:0;padding-left:18px;'>" + "".join(mp_items) + "</ul>",
+                                "</div>",
+                            ]
+
+                        # 4) Patient Counselling
+                        pc = obj.get("patient_counselling") or []
+                        if isinstance(pc, list) and pc:
+                            pc_items = [f"<li>{_safe(x)}</li>" for x in pc if str(x).strip()]
+                            if pc_items:
+                                plan_html += [
+                                    "<div style='background:#F5F0FF;padding:14px;border-left:4px solid #7B68AB;border-radius:8px;margin-bottom:12px;'>",
+                                    "<h4 style='color:#7B68AB;margin:0 0 8px 0;'>Counselling</h4>",
+                                    "<ul style='margin:0;padding-left:18px;'>" + "".join(pc_items) + "</ul>",
+                                    "</div>",
+                                ]
+
+                        plan_html_text = "\n".join(plan_html) if plan_html else None
+                    except Exception:
+                        obj = None
+                        plan_html_text = None
+
+                    if isinstance(obj, dict) and isinstance(plan_html_text, str) and plan_html_text.strip():
+                        st.markdown("### UPDATED MANAGEMENT PLAN (NEW)")
+                        st.markdown(plan_html_text, unsafe_allow_html=True)
+
+                        # Optional: raw JSON for reviewers (collapsed UI)
+                        with st.expander("View raw plan JSON", expanded=False):
+                            st.json(obj)
+
             analysis_results = st.session_state.get("analysis_results") or []
             if analysis_results:
+                # Rationale: keep the alert selector inside Output so results stay in one place.
                 selected_alert_id = st.selectbox(
                     "Select alert",
                     [r["alert"].alert_id for r in analysis_results],
@@ -1616,33 +2112,6 @@ def main() -> None:
                 alert = selected_result["alert"]
                 explanation = selected_result["explanation"]
 
-                st.markdown("**Acknowledge / Override**")
-                st.radio(
-                    "Action",
-                    ["Unreviewed", "Acknowledge", "Override"],
-                    key=f"alert_action_{alert.alert_id}",
-                    horizontal=True,
-                )
-
-                if st.session_state.get(f"alert_action_{alert.alert_id}") == "Override":
-                    st.selectbox(
-                        "Override reason (required)",
-                        [
-                            "",
-                            "Already addressed",
-                            "Not applicable",
-                            "Will address later",
-                            "Patient declined",
-                            "Other",
-                        ],
-                        key=f"alert_override_reason_{alert.alert_id}",
-                    )
-                    st.text_area(
-                        "Override comment (optional)",
-                        key=f"alert_override_comment_{alert.alert_id}",
-                        height=80,
-                    )
-                
                 # Red header with alert title
                 st.markdown(f"""
                     <div style='background-color: #DC3545; color: white; padding: 15px; border-radius: 8px 8px 0 0; margin-bottom: 0;'>
@@ -1671,7 +2140,7 @@ def main() -> None:
                 )
                 finding_text = re.sub(r"chunk[_\s]*id\s*[:=]\s*[^\s,\)\]]+", "", finding_text, flags=re.IGNORECASE)
 
-                # Rationale: replace inline page citations with numbered references for readability.
+                # Rationale: build a small reference list, but keep it out of the main Finding text.
                 cited_pages: List[int] = []
                 try:
                     raw_citations = (alert.evidence or {}).get("citations") or []
@@ -1686,10 +2155,10 @@ def main() -> None:
                     cited_pages = []
                 cited_pages_set = {p for p in cited_pages if isinstance(p, int)}
 
-                # Remove explicit page annotations from the Finding text; references appear below.
+                # Remove explicit page annotations from the Finding text; references appear under Details.
                 finding_text = re.sub(r"\(page\s*=\s*\d+\)", "", finding_text, flags=re.IGNORECASE)
 
-                refs: List[tuple[str, int]] = []
+                refs = []
                 try:
                     retrieved_for_alert = list(selected_result.get("retrieved") or [])
                     for r in retrieved_for_alert:
@@ -1701,13 +2170,12 @@ def main() -> None:
                             page_i = int(page)
                         except Exception:
                             continue
-                        if cited_pages_set and page_i not in cited_pages_set:
-                            continue
                         src = meta.get("source_path")
                         src_name = Path(str(src)).name if src else "Guidelines"
                         key = (src_name, page_i)
                         if key not in refs:
                             refs.append(key)
+
                     # Fallback: if we couldn't match cited pages, just list the first couple retrieved refs.
                     if not refs:
                         for r in retrieved_for_alert:
@@ -1729,33 +2197,23 @@ def main() -> None:
                 except Exception:
                     refs = []
 
-                ref_markers = "".join(f"[{i}]" for i in range(1, len(refs) + 1))
                 finding_display = html.escape(" ".join(finding_text.split()))
-                if ref_markers:
-                    finding_display = f"{finding_display} {html.escape(ref_markers)}"
-
-                refs_html = ""
-                if refs:
-                    items = "".join(
-                        f"<li>{html.escape(src)}, p.{int(page)}</li>" for src, page in refs
-                    )
-                    refs_html = (
-                        "<div style='margin-top: 8px; color: #555; font-size: 0.95em;'>"
-                        "<strong>References:</strong>"
-                        "<ol style='margin: 6px 0 0 18px; padding: 0;'>"
-                        f"{items}"
-                        "</ol>"
-                        "</div>"
-                    )
                 st.markdown(f"""
                     <div style='background-color: white; padding: 20px; border-left: 4px solid #DC3545; margin-bottom: 15px;'>
                         <p style='margin: 0;'><strong>Finding:</strong> {finding_display}</p>
-                        {refs_html}
                     </div>
                 """, unsafe_allow_html=True)
-                
-                # Comprehensive text cleaning function
-                
+
+                # Rationale: keep references out of the main alert text; show them only in Details.
+                with st.expander("Details (debug)", expanded=False):
+                    if refs:
+                        st.markdown("**References**")
+                        st.markdown(
+                            "\n".join(
+                                [f"{i+1}. {src}, p.{page}" for i, (src, page) in enumerate(refs)]
+                            )
+                        )
+
                 def clean_llm_text(text):
                     """Clean LLM output by removing all technical artifacts and metadata."""
                     if not text:
@@ -1816,58 +2274,138 @@ def main() -> None:
                 """, unsafe_allow_html=True)
                 
                 # Extract recommendations from explanation text
-                explanation_cleaned = clean_llm_text(explanation.text)
-                explanation_lines = explanation_cleaned.split('.')
-                recommendations = []
-                
-                for line in explanation_lines:
-                    line_stripped = line.strip()
-                    # Look for action-oriented phrases
-                    if (line_stripped and len(line_stripped) > 20 and
-                        any(keyword in line_stripped.lower() for keyword in 
-                            ['should', 'recommend', 'consider', 'check', 'monitor', 'switch', 
-                             'stop', 'start', 'assess', 'review', 'ensure', 'investigate'])):
-                        
-                        # Further clean the line
-                        cleaned = clean_llm_text(line_stripped)
-                        
-                        # Skip if it's just metadata or too short
-                        if (cleaned and len(cleaned) > 25 and 
+                explanation_raw = explanation.text or ""
+                explanation_cleaned = clean_llm_text(explanation_raw)
+
+                # Rationale: citations are often appended at the end of the explanation (not per-sentence).
+                # Treat actions as guideline-supported if the overall explanation contains any page citation.
+                has_any_page_citation = bool(
+                    re.search(r"\bpage\s*=\s*\d+\b", explanation_raw, flags=re.IGNORECASE)
+                )
+
+                # If an agentic UPDATED MANAGEMENT PLAN exists at patient level, hide per-alert
+                # recommendations to avoid duplicating the patient-level plan in every alert.
+                has_agentic_plan = False
+                try:
+                    _ar = st.session_state.get("agentic_debug_result")
+                    _plan_text = None
+                    if is_dataclass(_ar):
+                        _plan_text = getattr(_ar, "updated_management_plan_text", None)
+                        if _plan_text is None:
+                            _dbg = getattr(_ar, "debug_info", None) or {}
+                            if isinstance(_dbg, dict):
+                                _plan_text = _dbg.get("updated_management_plan_text")
+                    has_agentic_plan = isinstance(_plan_text, str) and bool(_plan_text.strip())
+                except Exception:
+                    has_agentic_plan = False
+
+                # Rationale: when an extracted action line has no explicit page citation (or signals uncertainty),
+                # soften phrasing to "Consider ..." to avoid over-assertive recommendations.
+                def has_page_citation(raw_text: str) -> bool:
+                    if not raw_text:
+                        return False
+                    return bool(re.search(r"\bpage\s*=\s*\d+\b", raw_text, flags=re.IGNORECASE))
+
+                def soften_recommendation(rec_text: str) -> str:
+                    if not rec_text:
+                        return rec_text
+                    t = rec_text.strip()
+                    if not t:
+                        return t
+                    if t.lower().startswith("consider "):
+                        return t
+
+                    # Handle common imperative verbs to keep grammar natural.
+                    m = re.match(r"^([A-Za-z]+)\b(.*)$", t)
+                    if not m:
+                        return f"Consider {t}"
+
+                    verb = m.group(1).lower()
+                    rest = m.group(2)
+                    verb_to_gerund = {
+                        "switch": "switching",
+                        "stop": "stopping",
+                        "start": "starting",
+                        "check": "checking",
+                        "monitor": "monitoring",
+                        "repeat": "repeating",
+                        "recheck": "rechecking",
+                        "assess": "assessing",
+                        "review": "reviewing",
+                        "investigate": "investigating",
+                        "refer": "referring",
+                        "order": "ordering",
+                    }
+                    if verb in verb_to_gerund:
+                        return f"Consider {verb_to_gerund[verb]}{rest}"
+
+                    return f"Consider {t}"
+
+                # Only build per-alert Recommended Actions when no patient-level agentic plan is present.
+                if not has_agentic_plan:
+                    recommendations = []  # list of tuples: (text, is_weak_evidence)
+                    explanation_lines_raw = explanation_raw.split('.')
+
+                    for line_raw in explanation_lines_raw:
+                        line_stripped_raw = line_raw.strip()
+                        if not line_stripped_raw:
+                            continue
+
+                        if not re.match(
+                            r"^(consider|switch|stop|start|repeat|recheck|check|monitor|assess|review|investigate|refer|order|hold|restart)\b",
+                            line_stripped_raw,
+                            flags=re.IGNORECASE,
+                        ):
+                            continue
+
+                        cleaned = clean_llm_text(line_stripped_raw)
+                        if (cleaned and len(cleaned) > 25 and
                             not cleaned.lower().startswith(('page', 'the guideline', 'excerpt'))):
-                            recommendations.append(cleaned + '.')
+                            weak_evidence = (
+                                (not has_any_page_citation)
+                                or ("uncertain" in line_stripped_raw.lower())
+                                or ("not specified" in line_stripped_raw.lower())
+                            )
+                            recommendations.append((cleaned + '.', weak_evidence))
                 
-                # If no recommendations found, try extracting from alert.evidence
-                if not recommendations and hasattr(alert, 'evidence') and isinstance(alert.evidence, dict):
-                    rec_action = alert.evidence.get('recommended_action', '')
-                    if rec_action:
-                        rec_cleaned = clean_llm_text(rec_action)
-                        if rec_cleaned:
-                            recommendations = [rec_cleaned]
-                
-                # Final fallback: extract key sentences from cleaned explanation
-                if not recommendations:
-                    sentences = [s.strip() for s in explanation_cleaned.split('.') if s.strip()]
-                    # Take sentences that are substantial and informative
-                    recommendations = [s + '.' for s in sentences[:3] if len(s) > 30]
-                
-                # Build the HTML for recommendations
-                rec_items = ""
-                for i, rec in enumerate(recommendations[:6], 1):  # Limit to 6 recommendations
-                    rec_cleaned = clean_llm_text(rec)
-                    # Skip segments that are only whitespace or tag-like noise after cleaning.
-                    if not rec_cleaned or len(rec_cleaned) < 10:
-                        continue
-                    # rec_items += f"<li>{rec_cleaned}</li>\n"
-                    rec_items += f"<li>{html.escape(rec_cleaned)}</li>\n"
-                
-                st.markdown(f"""
-                    <div style='background-color: #F0F8F0; padding: 20px; border-radius: 8px; border-left: 4px solid #52B788; margin-bottom: 15px;'>
-                        <h4 style='color: #52B788; margin-top: 0;'>Recommended Actions:</h4>
-                        <ol style='margin: 0; padding-left: 20px;'>
-                            {rec_items}
-                        </ol>
-                    </div>
-                """, unsafe_allow_html=True)
+                if not has_agentic_plan:
+                    # If no recommendations found, try extracting from alert.evidence
+                    if hasattr(alert, 'evidence') and isinstance(alert.evidence, dict) and not recommendations:
+                        rec_action = alert.evidence.get('recommended_action', '')
+                        if rec_action:
+                            rec_cleaned = clean_llm_text(rec_action)
+                            if rec_cleaned:
+                                recommendations = [(rec_cleaned, True)]
+
+                    # Final fallback: extract key sentences from cleaned explanation
+                    if not recommendations:
+                        sentences = [s.strip() for s in explanation_cleaned.split('.') if s.strip()]
+                        recommendations = [(s + '.', True) for s in sentences[:3] if len(s) > 30]
+
+                    # Build the HTML for recommendations
+                    rec_items = ""
+                    for i, (rec_text, weak_evidence) in enumerate(recommendations[:6], 1):  # Limit to 6 recommendations
+                        rec_cleaned = clean_llm_text(rec_text)
+                        if not rec_cleaned or len(rec_cleaned) < 10:
+                            continue
+                        if weak_evidence:
+                            rec_cleaned = soften_recommendation(rec_cleaned)
+                        rec_items += f"<li>{html.escape(rec_cleaned)}</li>\n"
+
+                    st.markdown(f"""
+                        <div style='background-color: #F0F8F0; padding: 20px; border-radius: 8px; border-left: 4px solid #52B788; margin-bottom: 15px;'>
+                            <h4 style='color: #52B788; margin-top: 0;'>Recommended Actions:</h4>
+                            <ol style='margin: 0; padding-left: 20px;'>
+                                {rec_items}
+                            </ol>
+                        </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    # Minimal clinician note: avoid duplicating actions when a patient-level plan exists
+                    st.markdown(
+                        "<div style='background:#E8F4F8;padding:12px;border-left:4px solid #2E86AB;border-radius:8px;margin-bottom:12px;'><em>Recommended actions are covered by the patient-level UPDATED MANAGEMENT PLAN (NEW) above.</em></div>",
+                        unsafe_allow_html=True,
+                    )
 
                 # Rationale: highlight gaps between the clinician's plan and the guideline-grounded
                 # updated management plan (agentic output) in a clinician-friendly format.
@@ -1921,6 +2459,77 @@ def main() -> None:
                             <p style='margin: 0;'><span style='color: #DC3545;'>⚠ Gap:</span> Alert overridden. Ensure clinical reasoning is documented and guideline recommendations are considered.</p>
                         </div>
                     """, unsafe_allow_html=True)
+
+                # Rationale: preserve the candidate-rule marking action when per-alert expanders are disabled.
+                if (alert.evidence or {}).get("type") == "llm_screening":
+                    if st.button(
+                        "Mark as candidate deterministic rule",
+                        key=f"candidate_rule_output_{alert.alert_id}",
+                    ):
+                        existing_rules = _load_candidate_rules(CANDIDATE_RULES_PATH)
+                        # Avoid duplicating the same alert_id in the candidate file.
+                        existing_ids = {
+                            str(r.get("alert_id")) for r in existing_rules if isinstance(r, dict)
+                        }
+                        if alert.alert_id not in existing_ids:
+                            candidate: Dict[str, Any] = {
+                                "alert_id": alert.alert_id,
+                                "title": alert.title,
+                                "message": alert.message,
+                                "evidence": alert.evidence,
+                            }
+                            existing_rules.append(candidate)
+                            _save_candidate_rules(CANDIDATE_RULES_PATH, existing_rules)
+                            st.success(
+                                "Marked as candidate deterministic rule (saved under Data/candidate_rules.json)."
+                            )
+            else:
+                st.write("No alerts to review.")
+
+    # Rationale: keep review controls near the Finalize button, without duplicating the alert selector.
+    if alerts and st.session_state.get("analysis_ran"):
+        analysis_results = st.session_state.get("analysis_results") or []
+        if analysis_results:
+            selected_alert_id = st.session_state.get("output_selected_alert_id")
+            if not selected_alert_id:
+                selected_alert_id = analysis_results[0]["alert"].alert_id
+                st.session_state["output_selected_alert_id"] = selected_alert_id
+            if selected_alert_id not in {r["alert"].alert_id for r in analysis_results}:
+                selected_alert_id = analysis_results[0]["alert"].alert_id
+                st.session_state["output_selected_alert_id"] = selected_alert_id
+
+            selected_result = next(
+                (r for r in analysis_results if r["alert"].alert_id == selected_alert_id),
+                analysis_results[0],
+            )
+            alert = selected_result["alert"]
+
+            st.markdown("**Acknowledge / Override**")
+            st.radio(
+                "Action",
+                ["Unreviewed", "Acknowledge", "Override"],
+                key=f"alert_action_{alert.alert_id}",
+                horizontal=True,
+            )
+
+            if st.session_state.get(f"alert_action_{alert.alert_id}") == "Override":
+                st.selectbox(
+                    "Override reason (required)",
+                    [
+                        "",
+                        "Already addressed",
+                        "Not applicable",
+                        "Will address later",
+                        "Patient declined",
+                        "Other",
+                    ],
+                    key=f"alert_override_reason_{alert.alert_id}",
+                )
+                st.text_area(
+                    "Override comment (optional)",
+                    key=f"alert_override_comment_{alert.alert_id}",
+                    height=80,
+                )
 
     can_finalize = _can_finalize(alerts)
     if st.button("Finalize / Close visit", disabled=not can_finalize):

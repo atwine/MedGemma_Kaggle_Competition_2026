@@ -1,0 +1,27 @@
+EXAMPLE THREE 
+ARTEMIS Review — Weight Gain: Non-ARV Causes Identified
+Weight gain is most likely from undertreated hypothyroidism and amitriptyline, not DTG
+🔍 Most likely cause: Undertreated hypothyroidism (TSH 12.4) + amitriptyline side effect
+The patient has been on DTG for 3 years but weight gain only accelerated in the past year — coinciding with starting amitriptyline (a drug known to cause significant weight gain) and diagnosis of hypothyroidism (which is currently undertreated: TSH 12.4, target <4.5). Clinical signs support hypothyroidism as the main driver: dry skin, periorbital oedema, delayed ankle reflex relaxation. DTG may be a minor contributor, but the reversible causes should be addressed first before considering any ARV change.
+
+Suggested Management Plan
+🔄 REVIEW
+Clinician's plan: Considering switching from DTG due to weight gain
+Consider instead: Do not switch ARV regimen at this time. Address the reversible causes first.
+Reason: The weight gain coincides with amitriptyline and undertreated hypothyroidism, not with DTG initiation (patient was stable on DTG for 2 years before weight gain started). Switching ARVs now would not fix the weight gain and would add unnecessary complexity. Reassess weight trend after thyroid is optimised and amitriptyline is reviewed.
+➕ ADD
+Not in current plan
+Consider adding: Increase levothyroxine to 75–100 mcg daily. Emphasise daily adherence. Recheck TSH in 6 weeks.
+Reason: TSH 12.4 is severely elevated — current dose of 50 mcg is insufficient. Patient admits poor adherence. Undertreated hypothyroidism alone explains the weight gain, fatigue, and dyslipidaemia.
+➕ ADD
+Not in current plan
+Consider adding: Discuss with mental health team about switching amitriptyline to a weight-neutral antidepressant (e.g. fluoxetine).
+Reason: Amitriptyline (tricyclic antidepressant) causes significant weight gain. Fluoxetine (SSRI) is weight-neutral and has no significant interaction with TLD. The mental health team should make this decision given the depression diagnosis.
+➕ ADD
+Not in current plan
+Consider adding: Reassess weight trajectory in 3 months after thyroid optimised and antidepressant reviewed.
+Reason: If weight stabilises or decreases after addressing these two causes, no ARV change needed. If weight continues to rise despite optimised thyroid and weight-neutral antidepressant, then reconsider DTG's contribution at that point.
+
+Monitoring: TSH in 6 weeks (target <4.5). Weight at each visit. Fasting glucose and lipids in 3 months (expect improvement as thyroid normalises). Mood assessment at each visit.
+Counselling: Explain that the weight gain appears to be mainly from the underactive thyroid and the depression medication, not the HIV medication. Taking the thyroid medication every day is very important — suggest linking it to a daily habit (e.g. before morning tea). A change in the depression medication may be discussed with the mental health team. Continue current HIV medication for now.
+📖 Uganda Consolidated HIV Guidelines 2022: DTG-associated weight gain is acknowledged but should be a diagnosis of exclusion after addressing other reversible causes.

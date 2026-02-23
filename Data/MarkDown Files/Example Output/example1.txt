@@ -1,0 +1,32 @@
+EXAMPLE ONE
+
+ARTEMIS Review.
+TDF Nephrotoxicity: Progressive Renal Decline
+Kidney function is declining on TDF
+Most likely cause: TDF nephrotoxicity
+Rationale. Creatinine has risen progressively over 4 years on TDF (0.9 → 1.0 → 1.1 → 1.2 → 1.4 mg/dL). eGFR is now 52, below the guideline threshold of 60. Proteinuria 1+ and glycosuria trace indicate proximal tubular damage — this is the signature pattern of TDF kidney toxicity. Regular ibuprofen use (2–3×/week) is likely worsening the damage.
+
+Suggested Management Plan
+🔄 REVIEW
+Clinician's plan: Continue current TLD regimen
+Consider instead: Switch TDF to ABC. New regimen: ABC/3TC/DTG.
+Reason: eGFR 52 is below the 60 mL/min threshold. Creatinine has risen steadily for 4 years on TDF with signs of tubular damage. Uganda Guidelines: TDF is contraindicated when eGFR <60.
+🔄 REVIEW
+Clinician's plan: Repeat renal function in 6 months
+Consider instead: Recheck creatinine and eGFR in 4–6 weeks after switch.
+Reason: Need to confirm kidney function stabilises after removing TDF. If eGFR continues to decline after switch, refer for nephrology assessment.
+➕ ADD
+Not in current plan
+Consider adding: Stop ibuprofen. Use paracetamol for headaches instead.
+Reason: NSAIDs are nephrotoxic and compound TDF kidney damage. Patient reports using ibuprofen 2–3 times per week for 6 months.
+➕ ADD
+Not in current plan
+Consider adding: Check viral load before making the switch.
+Reason: Patient has been on ART for >6 months. Uganda Guidelines require VL to rule out treatment failure before single-drug substitution.
+✅ AGREE
+Clinician's plan: Advised hydration
+Supports: Continue hydration advice — appropriate supportive measure.
+
+Monitoring: Creatinine + eGFR at 4–6 weeks post-switch. If improving, repeat at 3 months, then 6-monthly. Urinalysis at each visit until proteinuria resolves. If eGFR does not improve after switch, refer for nephrology assessment.
+
+Counselling: Explain that the kidney problem is from the TDF in her HIV medication, not from HIV itself. The new regimen (ABC/3TC/DTG) works just as well for HIV but is safer for her kidneys. She must stop taking ibuprofen and use paracetamol instead. Report any new medications to the clinic before taking them.

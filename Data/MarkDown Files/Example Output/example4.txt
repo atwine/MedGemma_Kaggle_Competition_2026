@@ -1,0 +1,32 @@
+EXAMPLE FOUR
+ARTEMIS Review — CRITICAL: Drug Interaction Causing Virological Failure
+Two problems: carbamazepine toxicity (symptomatic) AND carbamazepine-DTG interaction (silent)
+Problem 1: Carbamazepine toxicity
+💊 Cause: Elevated carbamazepine level (14 mcg/mL, therapeutic range 4–12)
+The headaches, dizziness, nystagmus, ataxia, and tremor are classic carbamazepine toxicity. Hyponatraemia (128) is from carbamazepine-induced SIADH. The clinician correctly identified this.
+Problem 2: Virological failure from drug interaction
+⚠️ CRITICAL: Carbamazepine reduces DTG blood levels by >50%. This is why the viral load is now detectable.
+Carbamazepine is a potent enzyme inducer that dramatically lowers DTG levels. The viral load has risen from <50 to 1,240 copies/mL since carbamazepine was added 2 weeks ago. This is NOT an adherence problem — it is a drug interaction causing treatment failure. The Uganda Guidelines list carbamazepine as a contraindication with DTG unless the DTG dose is doubled.
+
+Suggested Management Plan
+✅ AGREE
+Clinician's plan: Reduce carbamazepine dose
+Supports: Reduce carbamazepine dose and monitor levels — symptoms should improve.
+🔄 REVIEW
+Clinician's plan: Concerned about detectable viral load but unsure of cause
+Consider: The detectable viral load is caused by the carbamazepine-DTG interaction. Two options to discuss with the neurology team:
+Option A (preferred): Switch carbamazepine to a non-interacting anticonvulsant — sodium valproate (can increase current dose), lamotrigine, or levetiracetam.
+Option B: If carbamazepine cannot be stopped, add an extra DTG 50 mg tablet taken 12 hours after the daily TLD dose (making DTG 50 mg twice daily).
+Reason: Uganda Guidelines: DTG is contraindicated with carbamazepine/phenytoin/phenobarbital unless DTG dose is increased to 50 mg BD.
+➕ ADD
+Not in current plan
+Consider adding: Correct hyponatraemia (sodium 128). Monitor sodium levels.
+Reason: Carbamazepine causes SIADH. May improve with dose reduction but needs monitoring. Fluid restrict if severe.
+➕ ADD
+Not in current plan
+Consider adding: Recheck viral load in 4–6 weeks after resolving the interaction.
+Reason: Expect VL to re-suppress once DTG levels are adequate. If VL remains detectable despite corrected interaction and good adherence, then consider resistance testing.
+
+Monitoring: Carbamazepine level in 1 week after dose reduction. Sodium level in 3–5 days. Viral load in 4–6 weeks. LFTs (ALT already mildly elevated at 68).
+Counselling: Explain that the epilepsy medication (carbamazepine) was interfering with the HIV medication, making it less effective. This is why the viral load has gone up — it is not because of poor adherence. The doctors will either change the epilepsy medication or adjust the HIV medication dose to fix this. It is very important to inform the HIV clinic whenever ANY new medication is started by another clinic or doctor, so interactions can be checked.
+📖 Uganda Consolidated HIV Guidelines 2022, Section 6.11: DTG contraindications include patients on carbamazepine, phenytoin, phenobarbital.

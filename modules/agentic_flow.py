@@ -461,6 +461,10 @@ def _reason_updated_management_plan(
     if llm_client is None:
         return None
 
+    # Rationale: the management plan can be long; request a longer response so the
+    # output is less likely to be cut off mid-way.
+    _PLAN_CHAT_OPTIONS = {"num_predict": 1600}
+
     def _strip_code_fences(text: str) -> str:
         # Rationale: tolerate models that wrap JSON in ```json fences.
         t = (text or "").strip()
@@ -475,12 +479,49 @@ def _reason_updated_management_plan(
             lines = lines[:-1]
         return "\n".join(lines).strip()
 
+    def _extract_first_json_object(text: str) -> str:
+        # Rationale: models sometimes add extra words before/after the JSON.
+        # We extract the first full {...} block so validation can still succeed.
+        raw = _strip_code_fences(text)
+        if not raw:
+            return ""
+        start = raw.find("{")
+        if start == -1:
+            return ""
+        depth = 0
+        in_str = False
+        esc = False
+        end = None
+        for i in range(start, len(raw)):
+            ch = raw[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+        return raw[start:end] if end is not None else raw[start:]
+
     def _validate_plan_json(text: str) -> List[str]:
         # Rationale: output must be machine-checkable and reliably structured.
         issues: List[str] = []
-        raw = _strip_code_fences(text)
-        if not raw:
+        raw = _extract_first_json_object(text)
+        if not (text or "").strip():
             return ["empty_output"]
+        if not raw:
+            # Rationale: caller provided content, but it didn't contain a JSON object.
+            return ["no_json_object_found"]
 
         try:
             obj = json.loads(raw)
@@ -587,10 +628,12 @@ def _reason_updated_management_plan(
                 "Draft plan JSON must be reorganized and repaired. Issues: "
                 + ", ".join(validation_issues)
                 + "\n\n"
+                "If the draft is incomplete or invalid, you MUST rebuild a complete, valid plan JSON from scratch. "
                 "You MUST de-duplicate repeated problems, merge overlapping ones, "
                 "and rewrite problem titles as patient problems/clinical decisions (not tasks). "
                 "Order problems from most urgent/high-risk to least. "
                 "You MUST include a valid art_regimen_decision with decision one of: Switch, Hold temporarily, Continue. "
+                "Keep the plan concise (max 6 problems). "
                 "Return ONLY the corrected JSON object."
             )
         )
@@ -601,19 +644,26 @@ def _reason_updated_management_plan(
             {
                 "role": "user",
                 "content": (
-                    "Draft management plan JSON (repair this):\n" + _strip_code_fences(draft_json_text)
+                    # Rationale: provide only the JSON object (when present) to reduce confusion.
+                    "Draft management plan JSON (repair this):\n"
+                    + (_extract_first_json_object(draft_json_text) or _strip_code_fences(draft_json_text))
                 ),
             }
         ]
 
-        repaired = llm_client.chat(messages)
+        repaired = llm_client.chat(
+            messages,
+            format="json",
+            options_override=_PLAN_CHAT_OPTIONS,
+        )
         if repaired is None:
             return None
         repaired = _strip_code_fences(repaired)
         issues = _validate_plan_json(repaired)
         if issues:
             return None
-        return repaired
+        # Rationale: return only the extracted JSON so downstream renderers don't see extra text.
+        return _extract_first_json_object(repaired) or repaired
 
     def _build_plan_messages(*, retry_feedback: Optional[str] = None) -> List[Dict[str, str]]:
         system_text = (
@@ -703,7 +753,9 @@ def _reason_updated_management_plan(
             if not chunks:
                 continue
             evidence_lines.append(f"Subtask {bundle.subtask_name}:")
-            for r in chunks[:3]:
+            # Rationale: keep the evidence snippet short to reduce the chance the LLM output
+            # is cut off mid-plan.
+            for r in chunks[:1]:
                 try:
                     metadata = getattr(r, "metadata", {}) or {}
                     page = metadata.get("page_number")
@@ -712,8 +764,8 @@ def _reason_updated_management_plan(
                 except Exception:
                     continue
                 preview = doc_text.replace("\n", " ")
-                if len(preview) > 300:
-                    preview = preview[:300] + "…"
+                if len(preview) > 200:
+                    preview = preview[:200] + "…"
                 evidence_lines.append(f"- page {page}, chunk {chunk_id}: {preview}")
             evidence_lines.append("")
         evidence_text = "\n".join(evidence_lines) or "No evidence retrieved."
@@ -736,24 +788,34 @@ def _reason_updated_management_plan(
 
     try:
         messages = _build_plan_messages()
-        plan_answer = llm_client.chat(messages)
+        plan_answer = llm_client.chat(
+            messages,
+            format="json",
+            options_override=_PLAN_CHAT_OPTIONS,
+        )
         if plan_answer is None:
             return None
 
         issues = _validate_plan_json(plan_answer)
         if not issues:
-            return _strip_code_fences(plan_answer)
+            # Rationale: return only the JSON object (ignore any extra words around it).
+            return _extract_first_json_object(plan_answer) or _strip_code_fences(plan_answer)
 
         # One retry with explicit format feedback (non-blocking if it still fails).
         feedback = "Previous output failed validation: " + ", ".join(issues)
         retry_messages = _build_plan_messages(retry_feedback=feedback)
-        plan_retry = llm_client.chat(retry_messages)
+        plan_retry = llm_client.chat(
+            retry_messages,
+            format="json",
+            options_override=_PLAN_CHAT_OPTIONS,
+        )
         if plan_retry is None:
             return plan_answer
 
         retry_issues = _validate_plan_json(plan_retry)
         if not retry_issues:
-            return _strip_code_fences(plan_retry)
+            # Rationale: return only the JSON object (ignore any extra words around it).
+            return _extract_first_json_object(plan_retry) or _strip_code_fences(plan_retry)
 
         # Organizer pass: attempt to repair/organize into a valid, de-duplicated
         # management plan JSON.

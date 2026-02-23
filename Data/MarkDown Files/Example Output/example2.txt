@@ -1,0 +1,30 @@
+EXAMPLE TWO 
+
+ARTEMIS Review — Pre-renal AKI from Dehydration (Not TDF Toxicity)
+Kidney injury caused by dehydration, not by ARV medication
+🔍 Most likely cause: Severe dehydration from infectious gastroenteritis
+This is NOT TDF nephrotoxicity. Evidence: (1) Creatinine was normal on TDF for 2 years before this episode, (2) No protein or glucose in the urine — TDF damage leaves a specific pattern (proteinuria + glycosuria) that is absent here, (3) Urea:creatinine ratio is 24:1, consistent with dehydration-related kidney injury rather than drug damage, (4) Patient has had severe diarrhoea and vomiting for 5 days — enough to cause kidney failure from fluid loss alone, (5) Family members have the same illness, pointing to an infectious outbreak.
+
+Suggested Management Plan
+✅ AGREE
+Clinician's plan: IV fluid resuscitation
+Supports: Aggressive IV fluid resuscitation — this is the priority. Patient is severely dehydrated with hypotension (90/60), tachycardia (112), and signs of severe volume depletion.
+✅ AGREE
+Clinician's plan: Empiric antibiotics for gastroenteritis
+Supports: Continue empiric antibiotics pending stool microscopy results.
+🔄 REVIEW
+Clinician's plan: Considering stopping TDF permanently
+Consider instead: Temporarily HOLD TLD during acute illness. Plan to RESTART once rehydrated and creatinine recovering.
+Reason: This kidney injury is from dehydration, not from TDF. Evidence: baseline creatinine was normal on TDF for 2 years, no proteinuria or glycosuria, urea:creatinine ratio consistent with pre-renal cause, family members affected. Permanently switching would unnecessarily disrupt a regimen that has been working well for 2 years.
+➕ ADD
+Not in current plan
+Consider adding: Monitor creatinine daily during rehydration — expect improvement within 48–72 hours.
+Reason: If creatinine improves with rehydration, this confirms a pre-renal cause. If it does NOT improve despite adequate fluids, then reassess for other causes including intrinsic renal damage.
+➕ ADD
+Not in current plan
+Consider adding: Correct electrolyte abnormalities — potassium 3.1 (low), sodium 132 (low).
+Reason: Hypokalaemia from GI losses needs potassium replacement. Hyponatraemia should correct with IV fluids. Monitor electrolytes daily.
+
+Monitoring: Creatinine + electrolytes daily × 3 days. Once creatinine <1.5 and patient tolerating oral intake → restart TLD. Recheck creatinine 1 week after restarting TLD to confirm stability. Stool microscopy result to guide antibiotic choice.
+Counselling: Explain that the kidney problem is from the diarrhoea and dehydration, not from the HIV medication. The HIV medication will be paused for a few days while he recovers and restarted once he is eating and drinking normally. Emphasise oral rehydration (ORS) and completing any prescribed antibiotics.
+📖 Uganda Consolidated HIV Guidelines 2022, Table 85: Temporarily holding ART during acute illness is distinct from permanent substitution for confirmed drug toxicity.
