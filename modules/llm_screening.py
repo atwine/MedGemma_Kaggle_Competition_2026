@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import json
 import logging
 import re
 from difflib import SequenceMatcher
 
 from modules.alert_rules import Alert
-from modules.llm_client import ChatMessage, OllamaClient
+from modules.llm_client import ChatMessage, OllamaClient, HuggingFaceClient
 from modules.patient_parser import PatientContext
 from modules.vector_store import VectorSearchResult
+
+# Rationale: both OllamaClient and HuggingFaceClient have the same chat() interface.
+LLMClient = Union[OllamaClient, HuggingFaceClient]
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +227,7 @@ def generate_llm_screening_alerts(
     patient_context: PatientContext,
     stage1_summary: Dict[str, Any],
     screening_chunks: List[VectorSearchResult],
-    llm_client: Optional[OllamaClient],
+    llm_client: Optional[LLMClient],
     debug: Optional[Dict[str, Any]] = None,
 ) -> List[Alert]:
     if llm_client is None:
