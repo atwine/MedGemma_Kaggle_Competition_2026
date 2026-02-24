@@ -1489,6 +1489,9 @@ def main() -> None:
                 if _dbg.get("parse_status") == "parse_failed":
                     st.error("LLM screening output could not be parsed as a JSON array; no-alert conclusion may be unreliable.")
                     st.text(_dbg.get("raw_output") or "")
+                # Rationale: show raw output for all cases to debug empty output issues
+                with st.expander("Debug: Raw LLM output", expanded=False):
+                    st.text(_dbg.get("raw_output") or "(no output captured)")
         elif _mode == "LLM screening (generate alerts)" and _use_ollama and _ollama_err:
             st.markdown(
                 "No alerts were generated. Deterministic rule-based checks did not trigger any alerts. "
@@ -1507,6 +1510,14 @@ def main() -> None:
         )
     else:
         st.warning(f"YELLOW: {len(alerts)} alert(s) to consider.")
+    
+    # Rationale: show raw LLM output for all cases (GREEN, YELLOW, RED) to debug parsing issues
+    if st.session_state.get("analysis_llm_mode") == "LLM screening (generate alerts)":
+        _dbg = st.session_state.get("analysis_screening_debug") or {}
+        if _dbg.get("raw_output"):
+            with st.expander("Debug: Raw LLM screening output", expanded=False):
+                st.caption(f"Parse status: {_dbg.get('parse_status') or 'unknown'}")
+                st.text(_dbg.get("raw_output"))
 
     # Rationale: use the live checkbox key ("agentic_ui_debug_enabled") so the plan
     # expanders render as soon as the checkbox is ticked, not only after a new run.

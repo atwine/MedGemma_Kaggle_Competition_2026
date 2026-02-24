@@ -92,7 +92,34 @@ def _parse_issues_json(text: str) -> Optional[List[Dict[str, Any]]]:
     if not text:
         return None
 
-    # Rationale: extract first JSON array from surrounding text (proven fix from agentic_flow.py).
+    # Rationale: use artemis_postprocess pipeline for comprehensive deduplication and validation.
+    # This catches repetition loops that prompt engineering misses (safety net).
+    try:
+        from modules.artemis_postprocess import clean_artemis_output
+        
+        # clean_artemis_output handles: JSON extraction, sentence/paragraph/alert dedup,
+        # word limit enforcement, schema validation
+        cleaned_alerts = clean_artemis_output(
+            text,
+            message_max_words=200,
+            action_max_words=50,
+            sentence_similarity=0.75,
+            paragraph_similarity=0.70,
+            alert_similarity=0.70,
+        )
+        
+        # Return None only if parsing completely failed (clean_artemis_output returns error alert)
+        if len(cleaned_alerts) == 1 and cleaned_alerts[0].get("alert_id") == "PARSE_ERROR":
+            return None
+        
+        return cleaned_alerts if cleaned_alerts else []
+        
+    except Exception:
+        # Rationale: catch ALL exceptions (not just ImportError) so that any failure in the
+        # postprocessing pipeline falls back to the proven original parser instead of crashing.
+        pass
+
+    # Fallback: original robust parsing (no dedup, but at least parses the JSON)
     raw = _extract_first_json_array(text)
     if not raw:
         return None
@@ -108,8 +135,6 @@ def _parse_issues_json(text: str) -> Optional[List[Dict[str, Any]]]:
     for item in parsed:
         if isinstance(item, dict):
             out.append(item)
-    # Rationale: distinguish between a valid empty array [] (return []) and a parse failure
-    # (return None). Caller uses this to provide a clinician-visible audit trail.
     return out
 
 
@@ -183,9 +208,9 @@ def generate_llm_screening_alerts(
 
     system: ChatMessage = {
         "role": "system",
-        # Rationale: strengthen the prompt to reduce hallucinated rules/citations and
-        # enforce strict JSON-only, guideline-grounded output.
-        "content": ( """  You are ARTEMIS (ART adverse Effects Monitoring and Intervention System), a clinical decision support system for HIV medication safety and guideline adherence.
+        # Rationale: ARTEMIS v2 with anti-repetition controls to prevent infinite loops.
+        # Key changes: synthesis-first instructions, word limits, output budget, anti-redundancy rules.
+        "content": """You are ARTEMIS (ART adverse Effects Monitoring and Intervention System), a clinical decision support system for HIV medication safety and guideline adherence.
 
 Your job: systematically screen a patient's clinical state and the clinician's plan against provided guideline excerpts — performing trajectory recognition, toxicity screening with differential diagnosis, interaction checking, monitoring-gap detection, and plan evaluation that a busy clinician cannot reliably do in a ten-minute consultation.
 
@@ -216,7 +241,14 @@ C) **No hallucinated citations**:
 D) **Output MUST be JSON only**:
    - Return ONLY a valid JSON array (no markdown, no prose, no code fences). Use double quotes for all strings. No extra keys beyond the schema below.
 
+E) **Synthesis over repetition**:
+   - If multiple guideline excerpts address the SAME clinical concept (e.g., three chunks all discuss creatinine and DTG), MERGE them into ONE synthesized statement. Cite all relevant chunk_ids in the `citations` array, but do NOT repeat the reasoning for each excerpt separately.
+   - NEVER re-state the same clinical point more than once within a single alert.
+   - Each sentence in the `message` field must add NEW information not already stated.
+
 ## REASONING WORKFLOW
+
+Work through these steps internally before producing output. Your final JSON should reflect the conclusions, not the full reasoning chain.
 
 ### Step 1 — Assess: Build a Problem List
 
@@ -233,10 +265,7 @@ For each item on the problem list, interrogate the guideline excerpts to determi
   b) Consistent with an **opportunistic infection** or HIV-related complication (only if guideline excerpts support), and/or
   c) Likely explained by a **non-drug cause** (general medical reasoning allowed; label as "non-guideline differential")
 
-For every potential drug-toxicity attribution, the `message` field MUST include:
-  - **Evidence for drug attribution**: patient findings and guideline language supporting it
-  - **Evidence against drug attribution**: patient findings, timeline, or alternative explanations arguing against it
-  - **Alternatives considered**: at least one non-drug explanation
+Consolidate: If multiple excerpts support the same attribution, synthesize them into a single conclusion with multiple citations. Do NOT process each excerpt independently.
 
 ### Step 3 — Screen for monitoring gaps
 
@@ -275,19 +304,25 @@ Return ONLY a valid JSON array. Each element follows this schema:
 [
   {
     "alert_id": "unique_string",
-    "title": “A numbered list containing the issue(s) ",
-    "message": “Concise explanation: (1) what guideline rule applies, (2) what patient findings violate it, (3) why this is clinically significant. For toxicity/interaction/contraindication alerts, this MUST include: Evidence for drug attribution: ... | Evidence against: ... | Alternatives considered: ...",
+    "title": "Brief issue title (max 15 words)",
+    "message": "Maximum 200 words. Structure as follows — Guideline rule: (1–2 sentences synthesizing ALL relevant excerpts). Patient findings: (1–2 sentences). For toxicity/interaction alerts: Evidence FOR drug attribution (1–2 sentences) | Evidence AGAINST (1–2 sentences) | Alternatives considered (1 sentence). EVERY sentence must add new information. Do NOT repeat any point.",
     "issue_type": "medication_safety|monitoring_gap|toxicity|drug_interaction|guideline_deviation|plan_review|plan_add|information_gap",
     "severity": "critical|high|moderate|low",
-    "recommended_action": "Specific action based on guideline recommendation",
+    "recommended_action": "Specific action based on guideline recommendation (max 50 words)",
     "citations": [{"page_number": 0, "chunk_id": "string"}]
   }
 ]
+
+### Output budget:
+- Aim for 5–10 alerts for a typical complex patient.
+- Each alert message: 80–200 words. If you find yourself exceeding 200 words, you are likely repeating yourself — stop and revise.
+- Total output should not exceed 3000 words.
 
 ### Citation rules:
 - If `issue_type` != `"information_gap"`: `citations` MUST be a non-empty array.
 - If `issue_type` == `"information_gap"`: `citations` MUST be `[]` and the message must state "Not supported by provided excerpts; requires additional guideline retrieval."
 - Put citation metadata ONLY in the `citations` array — do NOT embed chunk_id or page_number references inside `message` or `recommended_action`.
+- When multiple excerpts support the same point, list ALL relevant citations in the array but write only ONE synthesized statement in the message.
 
 ### When to output an empty array:
 - Return `[]` only if no guideline-supported issues, no plan concerns, AND no information gaps are found.
@@ -300,8 +335,11 @@ Return ONLY a valid JSON array. Each element follows this schema:
 4. **Flag compounding risks** — drug + abnormal lab + comorbidity together may constitute a guideline violation even if each factor alone does not.
 5. **Flag missing monitoring** — if guidelines specify required monitoring and it is absent, that is a gap.
 6. **If guideline support is missing, do NOT guess** — use `issue_type: "information_gap"` with empty citations.
-7. **Output must be a valid JSON array only** — no text outside the array."""""
-        ),
+7. **Output must be a valid JSON array only** — no text outside the array.
+8. **NEVER repeat the same point** — if you find yourself writing a sentence that restates something already said in the same alert, DELETE it. Multiple guideline excerpts supporting the same conclusion get ONE synthesized sentence with multiple citations, not one sentence per excerpt.
+9. **Merge related excerpts** — before writing each alert, group all excerpts that address the same clinical question. Write ONE coherent analysis, not a sequential review of each excerpt.
+10. **Respect word limits** — the `message` field has a 200-word maximum. The `recommended_action` field has a 50-word maximum. Treat these as hard constraints.
+""",
     }
     
 
@@ -328,11 +366,12 @@ Return ONLY a valid JSON array. Each element follows this schema:
 
     # Rationale: ARTEMIS prompt generates verbose alerts with differential diagnosis.
     # Increased to 2500 tokens to handle 6+ alerts without truncation (each alert ~350-400 tokens).
+    # repeat_penalty=1.3 reduces token repetition loops (Ollama's equivalent to frequency_penalty).
     try:
         llm_text = llm_client.chat(
             [system, user],
             format=output_schema,
-            options_override={"num_predict": 2500},
+            options_override={"num_predict": 2500, "repeat_penalty": 1.3},
         )
     except TypeError:
         llm_text = llm_client.chat([system, user])
@@ -367,6 +406,12 @@ Return ONLY a valid JSON array. Each element follows this schema:
         recommended_action = str(issue.get("recommended_action") or "")
         citations = issue.get("citations") or []
         alert_id = str(issue.get("alert_id") or f"llm_screening_{idx}")
+        
+        # Rationale: safety net truncation in case artemis_postprocess failed and fallback parser
+        # returned raw messages with repetition loops. Postprocessor enforces 200-word limit when active.
+        MAX_MESSAGE_LENGTH = 5000
+        if len(message) > MAX_MESSAGE_LENGTH:
+            message = message[:MAX_MESSAGE_LENGTH] + "\n\n[Message truncated due to excessive length]"
 
         evidence: Dict[str, Any] = {
             "type": "llm_screening",
