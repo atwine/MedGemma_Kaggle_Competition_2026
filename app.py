@@ -1792,9 +1792,9 @@ def main() -> None:
                     with st.expander("View raw plan JSON", expanded=False):
                         st.json(obj)
 
-    # Rationale: per-alert expanders duplicate the selected alert view under "Output".
-    # Keep this block disabled so clinicians only see one consolidated Output.
-    if False and agentic_enabled and alerts:
+    # Rationale: render per-alert expanders so clinicians can see each alert's
+    # finding, explanation, and references.
+    if alerts:
         for item in st.session_state.get("analysis_results", []):
             alert: Alert = item["alert"]
             retrieved: List[VectorSearchResult] = item["retrieved"]
