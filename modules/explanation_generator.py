@@ -294,14 +294,8 @@ def _try_llm_explanation(
     system: ChatMessage = {
         "role": "system",
         "content": (
-            "You are a clinical decision support assistant. "
-            "Only use the provided guideline excerpts as evidence. "
-            "If information is missing, say so. "
-            "If no excerpts are provided, say you cannot give guideline-grounded suggestions. "
-            # Rationale: prevent UI artifacts from models emitting HTML/escaped HTML/markdown.
-            "Return plain text only (no HTML/XML tags, no escaped HTML like &lt;...&gt;, no markdown). "
-            "Always include at least one *quoted* guideline excerpt and a citation in the form (page=<page_number>) when excerpts are provided. "
-            "Use suggestive language (e.g., 'Consider...')."
+            "You are a clinical assistant. Use only provided excerpts. Be concise. "
+            "Return plain text with page citations (page=<page_number>). Brief quotes optional if they clarify the action."
         ),
     }
 
@@ -319,12 +313,7 @@ def _try_llm_explanation(
             f"Alert evidence: {alert.evidence}\n\n"
             "Guideline excerpts (use these for citations):\n"
             f"{chunks_block}\n\n"
-            "Write a short, structured response with these sections:\n"
-            "1) Why this alert triggered (based on the patient evidence above)\n"
-            "2) Plausible reasons / considerations (only if supported by excerpts; otherwise say 'Not specified in excerpts')\n"
-            "3) Questions to ask / next steps (grounded in excerpts)\n"
-            "4) Suggested urgency / timeframe (only if supported by excerpts; otherwise say 'Not specified in excerpts')\n"
-            "5) Citations: include at least one *quoted* excerpt with (page=<page_number>) when excerpts are provided"
+            "Provide: (1) Clinical issue and (2) Recommended action. Include page citation."
         ),
     }
 
@@ -372,10 +361,10 @@ def _try_llm_audit_checklist(
             f"{patient_context.labs_narrative if patient_context.labs_narrative else 'None recorded'}\n\n"
             "Guideline excerpts (use these for citations):\n"
             f"{chunks_block}\n\n"
-            "Create a visit audit checklist: things that should be checked in this visit (labs/monitoring/questions) based on the patient context and the excerpts. "
-            "Each item must be grounded in the excerpts and include at least one quoted excerpt + citation. "
+            "Create a brief visit audit checklist (maximum 3-5 items): key monitoring points based on patient context and excerpts. "
+            "Each item must cite page numbers. Brief rationale only. "
             "Output JSON as a list of objects with keys: title, recommendation, urgency, citations. "
-            "The citations value must be a list of objects with keys: page_number, chunk_id, quote. "
+            "The citations value must be a list of objects with keys: page_number, chunk_id. "
             "Return only JSON."
         ),
     }
