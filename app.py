@@ -2151,25 +2151,13 @@ def main() -> None:
                             st.json(obj)
 
 
-    # Rationale: keep review controls near the Finalize button
+    # Rationale: show review controls for EVERY alert so _can_finalize can pass.
+    # Previously only one alert was shown, making it impossible to resolve the rest.
     if alerts and st.session_state.get("analysis_ran"):
-        analysis_results = st.session_state.get("analysis_results") or []
-        if analysis_results:
-            selected_alert_id = st.session_state.get("output_selected_alert_id")
-            if not selected_alert_id:
-                selected_alert_id = analysis_results[0]["alert"].alert_id
-                st.session_state["output_selected_alert_id"] = selected_alert_id
-            if selected_alert_id not in {r["alert"].alert_id for r in analysis_results}:
-                selected_alert_id = analysis_results[0]["alert"].alert_id
-                st.session_state["output_selected_alert_id"] = selected_alert_id
-
-            selected_result = next(
-                (r for r in analysis_results if r["alert"].alert_id == selected_alert_id),
-                analysis_results[0],
-            )
-            alert = selected_result["alert"]
-
-            st.markdown("**Acknowledge / Override**")
+        st.markdown("---")
+        st.markdown("### Review Alerts")
+        for alert in alerts:
+            st.markdown(f"**{alert.title}**")
             st.radio(
                 "Action",
                 ["Unreviewed", "Acknowledge", "Override"],
@@ -2195,6 +2183,7 @@ def main() -> None:
                     key=f"alert_override_comment_{alert.alert_id}",
                     height=80,
                 )
+            st.markdown("---")
 
     can_finalize = _can_finalize(alerts)
     if st.button("Finalize / Close visit", disabled=not can_finalize):
