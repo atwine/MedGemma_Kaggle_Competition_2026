@@ -328,7 +328,18 @@ class HuggingFaceClient:
                 tokenize=True,
                 return_dict=True,
                 return_tensors="pt",
-            ).to(self._hf_model.device)
+            )
+            # T4 Fix: the processor may output bfloat16 tensors (vision components).
+            # Tesla T4 does not support bfloat16, so cast those to float16 before
+            # moving to GPU. Other tensors (e.g. int64 token IDs) just move as-is.
+            for key in inputs:
+                if hasattr(inputs[key], "dtype"):
+                    if inputs[key].dtype == torch.bfloat16:
+                        inputs[key] = inputs[key].to(
+                            device=self._hf_model.device, dtype=torch.float16
+                        )
+                    else:
+                        inputs[key] = inputs[key].to(device=self._hf_model.device)
 
             input_len = inputs["input_ids"].shape[-1]
 
@@ -340,6 +351,8 @@ class HuggingFaceClient:
             if float(temperature) > 0:
                 gen_kwargs["do_sample"] = True
                 gen_kwargs["temperature"] = float(temperature)
+                gen_kwargs["top_k"] = 50
+                gen_kwargs["top_p"] = 0.9
             else:
                 gen_kwargs["do_sample"] = False
 
