@@ -1872,9 +1872,16 @@ def main() -> None:
                 st.markdown("**Finding**")
                 st.write(_finding_text.strip() or "-")
 
-                st.markdown("**Why this alert?**")
+                # Rationale: for LLM screening alerts, show the recommended_action
+                # instead of duplicating the finding text under "Why this alert?".
                 _is_checklist = (alert.evidence or {}).get("type") == "llm_audit_checklist"
-                st.write(_why_text.strip() or "-")
+                _rec_action = (alert.evidence or {}).get("recommended_action") or ""
+                if _rec_action.strip():
+                    st.markdown("**Recommended Action**")
+                    st.write(_rec_action.strip())
+                else:
+                    st.markdown("**Why this alert?**")
+                    st.write(_why_text.strip() or "-")
 
                 # Rationale: keep technical retrieval details available without cluttering the main view.
                 with st.expander("Details (debug)", expanded=False):
