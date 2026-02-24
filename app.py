@@ -1517,6 +1517,14 @@ def main() -> None:
         if _dbg.get("raw_output"):
             with st.expander("Debug: Raw LLM screening output", expanded=False):
                 st.caption(f"Parse status: {_dbg.get('parse_status') or 'unknown'}")
+                # Rationale: show dedup stats so we can verify repetition removal is working.
+                if _dbg.get("dedup_stats"):
+                    st.caption("Dedup stats per alert:")
+                    for ds in _dbg["dedup_stats"]:
+                        st.caption(
+                            f"  {ds['alert_id']}: {ds['raw_words']}→{ds['clean_words']} words, "
+                            f"{ds['raw_chars']}→{ds['clean_chars']} chars"
+                        )
                 st.text(_dbg.get("raw_output"))
 
     # Rationale: use the live checkbox key ("agentic_ui_debug_enabled") so the plan

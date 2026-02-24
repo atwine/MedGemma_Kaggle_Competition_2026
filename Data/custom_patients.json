@@ -1,43 +1,5 @@
 [
   {
-    "patient_id": "P005",
-    "name": "John Doez",
-    "age_years": 53,
-    "sex": "M",
-    "art_regimen_current": [
-      "TDF/3TC/DTG (TLD) for 4 years."
-    ],
-    "other_medications": [
-      "None. ART-naive when started on TLD."
-    ],
-    "visits": [
-      {
-        "date": "2026-02-24",
-        "type": "intake",
-        "clinician_note": "Complaints & Symptoms:\n52-year-old man presents with 3-week history of generalized weakness and decreased appetite. Also notes his urine appears 'foamy' recently.\n\nExamination Findings:\nBP 148/92 mmHg. Weight 78kg (was 82kg 6 months ago). Mild bilateral pedal oedema. No ascites. Fundoscopy: mild hypertensive changes, no diabetic retinopathy.\n\nPrior History:\nHIV diagnosed 2020. Type 2 diabetes mellitus diagnosed 2019, on metformin 1g BD and glibenclamide 5mg BD. Hypertension diagnosed 2021, on amlodipine 10mg OD and lisinopril 10mg OD. Completed TB treatment (2RHZE/4RH) in 2022. Takes co-trimoxazole 960mg OD for prophylaxis. Recent course of gentamicin IM for presumed UTI 6 weeks ago (given at local clinic)."
-      }
-    ],
-    "labs": {
-      "labs_narrative": [
-        {
-          "date": "2026-02-24",
-          "narrative_text": "Creatinine: 2.8 mg/dL (was 1.3 mg/dL 3 months ago, 1.0 mg/dL 1 year ago). eGFR: 24 mL/min/1.73m2. Urinalysis: Protein 3+, glucose 2+. HbA1c: 8.2%. Fasting glucose: 186 mg/dL. Potassium: 5.4 mEq/L. Phosphate: 2.1 mg/dL (low). Viral load: <50 copies/mL. CD4: 445 cells/uL."
-        }
-      ]
-    },
-    "today_encounter": {
-      "date": "2026-02-24",
-      "note": "",
-      "orders": [],
-      "med_changes": []
-    },
-    "intake": {
-      "complaints_symptoms": "52-year-old man presents with 3-week history of generalized weakness and decreased appetite. Also notes his urine appears 'foamy' recently.",
-      "examination_findings": "BP 148/92 mmHg. Weight 78kg (was 82kg 6 months ago). Mild bilateral pedal oedema. No ascites. Fundoscopy: mild hypertensive changes, no diabetic retinopathy.",
-      "prior_history": "HIV diagnosed 2020. Type 2 diabetes mellitus diagnosed 2019, on metformin 1g BD and glibenclamide 5mg BD. Hypertension diagnosed 2021, on amlodipine 10mg OD and lisinopril 10mg OD. Completed TB treatment (2RHZE/4RH) in 2022. Takes co-trimoxazole 960mg OD for prophylaxis. Recent course of gentamicin IM for presumed UTI 6 weeks ago (given at local clinic)."
-    }
-  },
-  {
     "patient_id": "P006",
     "age_years": 29,
     "sex": "F",
@@ -78,6 +40,45 @@
       "complaints_symptoms": "29-year-old woman presents for routine 3-month follow-up after initiating ART. No complaints. Feeling well, energy improved since starting treatment.",
       "examination_findings": "BP 110/70 mmHg. Weight 68kg (pre-pregnancy weight 62kg). Fundal height appropriate for dates. Fetal movements present. No oedema. Urine dipstick negative for protein.",
       "prior_history": "HIV diagnosed 10 weeks ago during antenatal screening. Currently 22 weeks pregnant (second pregnancy, first child alive and well). No other medical conditions. No regular medications prior to ART. Taking ferrous sulfate and folic acid as prescribed."
+    }
+  },
+  {
+    "patient_id": "P005",
+    "age_years": 38,
+    "sex": "F",
+    "art_regimen_current": [
+      "TDF/3TC/DTG (TLD) fixed-dose combination once daily. On this regimen for 3 years"
+    ],
+    "other_medications": [
+      "AZT/3TC/NVP for 2 years (2018-2020)",
+      " switched to TLD in 2020 due to national guideline transition."
+    ],
+    "visits": [
+      {
+        "date": "2026-02-24",
+        "type": "intake",
+        "clinician_note": "Complaints & Symptoms:\n38-year-old woman presents for routine 6-monthly review. No specific complaints. Mentions mild fatigue over the past 2 months which she attributes to her busy work schedule.\n\nExamination Findings:\nBP 118/76 mmHg. Weight 64kg (stable). No peripheral oedema. No costovertebral angle tenderness. Otherwise unremarkable.\n\nSignificant history prior to today's visit:\nHIV diagnosed 2018. No diabetes, no hypertension. Adherence consistently >95% by pill count. No known allergies. Takes ibuprofen 400mg occasionally for headaches (approximately 2-3 times per week for the past 6 months due to work stress)."
+      }
+    ],
+    "labs": {
+      "labs_narrative": [
+        {
+          "date": "2026-02-24",
+          "narrative_text": "Creatinine: 1.4 mg/dL (previous values: 0.9 in 2020, 1.0 in 2021, 1.1 in 2022, 1.2 in 2023). eGFR: 52 mL/min/1.73m2 (CKD-EPI). Urinalysis: Protein 1+, glucose trace. Viral load: <50 copies/mL. CD4: 584 cells/uL. Hb: 12.8 g/dL.",
+          "source": "previous"
+        }
+      ]
+    },
+    "today_encounter": {
+      "date": "2026-02-24",
+      "note": "",
+      "orders": [],
+      "med_changes": []
+    },
+    "intake": {
+      "complaints_symptoms": "38-year-old woman presents for routine 6-monthly review. No specific complaints. Mentions mild fatigue over the past 2 months which she attributes to her busy work schedule.",
+      "examination_findings": "BP 118/76 mmHg. Weight 64kg (stable). No peripheral oedema. No costovertebral angle tenderness. Otherwise unremarkable.",
+      "prior_history": "HIV diagnosed 2018. No diabetes, no hypertension. Adherence consistently >95% by pill count. No known allergies. Takes ibuprofen 400mg occasionally for headaches (approximately 2-3 times per week for the past 6 months due to work stress)."
     }
   }
 ]

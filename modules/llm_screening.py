@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 import json
+import logging
+import re
+from difflib import SequenceMatcher
 
 from modules.alert_rules import Alert
 from modules.llm_client import ChatMessage, OllamaClient
 from modules.patient_parser import PatientContext
 from modules.vector_store import VectorSearchResult
+
+logger = logging.getLogger(__name__)
 
 
 def _build_screening_bundle(chunks: List[VectorSearchResult]) -> List[Dict[str, Any]]:
@@ -88,6 +93,54 @@ def _extract_first_json_array(text: str) -> str:
     return incomplete
 
 
+def _deduplicate_message(text: str, max_words: int = 200) -> str:
+    """Inline dedup + word limit — guaranteed to run on every alert message.
+    
+    Rationale: the artemis_postprocess pipeline may fail silently (import error,
+    JSON parse error, etc.) and the fallback parser returns raw LLM text with no
+    dedup. This function is the last line of defense against repetition loops.
+    It splits text into sentences, removes near-duplicates, and enforces a word limit.
+    """
+    if not text or len(text.split()) <= max_words:
+        return text
+    
+    # Split into sentences at period/exclamation/question followed by space + capital letter
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
+    
+    kept: List[str] = []
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        # Check if this sentence is too similar to one we already kept
+        is_dup = False
+        for existing in kept:
+            # Rationale: SequenceMatcher ratio >= 0.75 catches near-identical sentences
+            # that differ only in minor wording (e.g., rounding differences).
+            if SequenceMatcher(None, sentence.lower(), existing.lower()).ratio() >= 0.75:
+                is_dup = True
+                break
+        if not is_dup:
+            kept.append(sentence)
+    
+    result = " ".join(kept)
+    
+    # Enforce word limit with sentence-boundary truncation
+    words = result.split()
+    if len(words) > max_words:
+        truncated = " ".join(words[:max_words])
+        last_period = truncated.rfind(".")
+        if last_period > len(truncated) * 0.5:
+            truncated = truncated[:last_period + 1]
+        result = truncated
+    
+    logger.debug(
+        "Dedup: %d chars/%d words -> %d chars/%d words",
+        len(text), len(text.split()), len(result), len(result.split())
+    )
+    return result
+
+
 def _parse_issues_json(text: str) -> Optional[List[Dict[str, Any]]]:
     if not text:
         return None
@@ -114,10 +167,11 @@ def _parse_issues_json(text: str) -> Optional[List[Dict[str, Any]]]:
         
         return cleaned_alerts if cleaned_alerts else []
         
-    except Exception:
-        # Rationale: catch ALL exceptions (not just ImportError) so that any failure in the
-        # postprocessing pipeline falls back to the proven original parser instead of crashing.
-        pass
+    except Exception as exc:
+        # Rationale: catch ALL exceptions so that any failure in the postprocessing pipeline
+        # falls back to the proven original parser instead of crashing.
+        # Log the error so we can diagnose why postprocessing failed.
+        logger.warning("artemis_postprocess failed, using fallback parser: %s", exc)
 
     # Fallback: original robust parsing (no dedup, but at least parses the JSON)
     raw = _extract_first_json_array(text)
@@ -371,7 +425,7 @@ Return ONLY a valid JSON array. Each element follows this schema:
         llm_text = llm_client.chat(
             [system, user],
             format=output_schema,
-            options_override={"num_predict": 2500, "repeat_penalty": 1.3},
+            options_override={"num_predict": 1600, "repeat_penalty": 1.3},
         )
     except TypeError:
         llm_text = llm_client.chat([system, user])
@@ -396,22 +450,31 @@ Return ONLY a valid JSON array. Each element follows this schema:
         debug["parse_status"] = "parsed_nonempty"
 
     alerts: List[Alert] = []
+    dedup_stats: List[Dict[str, Any]] = []  # Debug: track dedup effectiveness per alert
     for idx, issue in enumerate(issues):
         if not isinstance(issue, dict):
             continue
         issue_type = str(issue.get("issue_type") or "screening_issue")
         severity = str(issue.get("severity") or "unspecified")
         title = str(issue.get("title") or issue_type)
-        message = str(issue.get("message") or issue_type)
+        message_raw = str(issue.get("message") or issue_type)
         recommended_action = str(issue.get("recommended_action") or "")
         citations = issue.get("citations") or []
         alert_id = str(issue.get("alert_id") or f"llm_screening_{idx}")
         
-        # Rationale: safety net truncation in case artemis_postprocess failed and fallback parser
-        # returned raw messages with repetition loops. Postprocessor enforces 200-word limit when active.
-        MAX_MESSAGE_LENGTH = 5000
-        if len(message) > MAX_MESSAGE_LENGTH:
-            message = message[:MAX_MESSAGE_LENGTH] + "\n\n[Message truncated due to excessive length]"
+        # Rationale: guaranteed dedup — runs regardless of whether artemis_postprocess succeeded.
+        # This is the last line of defense against LLM repetition loops.
+        message = _deduplicate_message(message_raw)
+        recommended_action = _deduplicate_message(recommended_action, max_words=50)
+        
+        # Debug: track how much dedup reduced the message
+        dedup_stats.append({
+            "alert_id": alert_id,
+            "raw_words": len(message_raw.split()),
+            "clean_words": len(message.split()),
+            "raw_chars": len(message_raw),
+            "clean_chars": len(message),
+        })
 
         evidence: Dict[str, Any] = {
             "type": "llm_screening",
@@ -431,5 +494,9 @@ Return ONLY a valid JSON array. Each element follows this schema:
                 query_hint="HIV regimen safety monitoring toxicities drug interactions",
             )
         )
+
+    # Debug: persist dedup stats so they show in the Streamlit debug expander
+    if debug is not None:
+        debug["dedup_stats"] = dedup_stats
 
     return alerts
