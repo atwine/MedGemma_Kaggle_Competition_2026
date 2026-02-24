@@ -964,8 +964,12 @@ def main() -> None:
                 try:
                     if new_todays_lab_results:
                         todays_labs = _parse_bulk_labs(new_todays_lab_results)
-                        # Merge today's labs into labs_parsed
+                        # Merge today's labs into labs_parsed with source tag
                         for lab_name, entries in todays_labs.items():
+                            if lab_name == "labs_narrative":
+                                # Tag narrative entries as "today"
+                                for entry in entries:
+                                    entry["source"] = "today"
                             labs_parsed.setdefault(lab_name, []).extend(entries)
                 except ValueError as exc:
                     st.error(f"Error in today's lab results: {str(exc)}")
@@ -974,8 +978,12 @@ def main() -> None:
                 try:
                     if new_previous_lab_results:
                         previous_labs = _parse_bulk_labs(new_previous_lab_results)
-                        # Merge previous labs into labs_parsed
+                        # Merge previous labs into labs_parsed with source tag
                         for lab_name, entries in previous_labs.items():
+                            if lab_name == "labs_narrative":
+                                # Tag narrative entries as "previous"
+                                for entry in entries:
+                                    entry["source"] = "previous"
                             labs_parsed.setdefault(lab_name, []).extend(entries)
                 except ValueError as exc:
                     st.error(f"Error in previous lab results: {str(exc)}")
@@ -1217,8 +1225,8 @@ def main() -> None:
                 narrative_entries = labs_raw.get("labs_narrative", [])
                 for entry in narrative_entries:
                     if isinstance(entry, dict):
-                        entry_date = entry.get("date", "")
-                        if entry_date == encounter_date_str:
+                        source = entry.get("source", "")
+                        if source == "today":
                             narrative = entry.get("narrative_text", "")
                             if narrative:
                                 st.markdown(narrative)
@@ -1241,9 +1249,10 @@ def main() -> None:
                 narrative_entries = labs_raw.get("labs_narrative", [])
                 for entry in narrative_entries:
                     if isinstance(entry, dict):
-                        entry_date = entry.get("date", "")
-                        if entry_date != encounter_date_str:
+                        source = entry.get("source", "")
+                        if source == "previous":
                             narrative = entry.get("narrative_text", "")
+                            entry_date = entry.get("date", "")
                             if narrative:
                                 st.markdown(f"**{entry_date}:**")
                                 st.markdown(narrative)
