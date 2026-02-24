@@ -198,8 +198,9 @@ class HuggingFaceConfig:
     # Rationale: max tokens to generate per call. Matches the num_predict
     # concept from Ollama but with a higher default since FP16 is faster.
     max_new_tokens: int = 2000
-    # Rationale: lower temperature for more deterministic clinical output.
-    temperature: float = 0.2
+    # Rationale: use greedy decoding (temperature=0) for deterministic clinical
+    # output and to avoid FP16 NaN issues with torch.multinomial on Tesla T4.
+    temperature: float = 0.0
     # Rationale: repetition_penalty >1.0 discourages repeating tokens.
     # Equivalent to Ollama's repeat_penalty.
     repetition_penalty: float = 1.3
