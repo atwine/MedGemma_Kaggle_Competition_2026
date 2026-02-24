@@ -327,7 +327,7 @@ class HuggingFaceClient:
                 tokenize=True,
                 return_dict=True,
                 return_tensors="pt",
-            ).to(self._hf_model.device, dtype=self._hf_model.dtype)
+            ).to(self._hf_model.device)
 
             input_len = inputs["input_ids"].shape[-1]
 
