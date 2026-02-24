@@ -78,18 +78,23 @@ def _extract_first_json_array(text: str) -> str:
     if end is not None:
         return raw[start:end]
     
-    # Rationale: if array is incomplete (truncated output), attempt to close it gracefully.
-    # This allows partial results to be parsed rather than failing completely.
+    # Rationale: if array is incomplete (truncated output), salvage all fully-formed
+    # objects and discard the last incomplete one. Simply closing braces on a truncated
+    # object (e.g., '{"page') produces invalid JSON like '{"page}]'.
+    # Instead, find the last complete '}' that ends a top-level object and cut there.
     incomplete = raw[start:]
-    # Close any open string
-    if in_str:
-        incomplete += '"'
-    # Close any open objects by counting braces
-    brace_depth = incomplete.count('{') - incomplete.count('}')
-    for _ in range(brace_depth):
-        incomplete += '}'
-    # Close the array
-    incomplete += ']'
+    # Find the position of the last '}' that closes a complete top-level object
+    last_complete_obj = incomplete.rfind('},')
+    if last_complete_obj == -1:
+        last_complete_obj = incomplete.rfind('}')
+    if last_complete_obj != -1:
+        # Keep everything up to and including the last complete '}'
+        incomplete = incomplete[:last_complete_obj + 1] + ']'
+    else:
+        # No complete objects at all — return empty array
+        incomplete = '[]'
+    # Rationale: fix trailing commas before ] that json.loads rejects
+    incomplete = re.sub(r',\s*\]', ']', incomplete)
     return incomplete
 
 
@@ -99,11 +104,31 @@ def _deduplicate_message(text: str, max_words: int = 200) -> str:
     Rationale: the artemis_postprocess pipeline may fail silently (import error,
     JSON parse error, etc.) and the fallback parser returns raw LLM text with no
     dedup. This function is the last line of defense against repetition loops.
-    It splits text into sentences, removes near-duplicates, and enforces a word limit.
+    
+    Two-layer approach:
+      Layer 1 — Phrase-level: detect any phrase (5+ words) that repeats 3+ times
+                and collapse it to a single occurrence. This catches loops like
+                "The patient is on TDF, 3TC, and DTG. The patient is on TDF, 3TC..."
+      Layer 2 — Sentence-level: split on sentence boundaries and remove sentences
+                that are ≥75% similar to one already kept.
     """
-    if not text or len(text.split()) <= max_words:
+    if not text:
         return text
     
+    orig_len = len(text.split())
+    
+    # --- Layer 1: Phrase-level repetition collapse ---
+    # Rationale: the LLM sometimes gets stuck repeating a phrase that doesn't end
+    # with punctuation, so sentence splitting can't catch it. We look for any
+    # substring of 5+ words that appears 3+ times and keep only the first occurrence.
+    # This regex finds a phrase of 5+ words that repeats at least 2 more times.
+    text = re.sub(
+        r'((?:\S+\s+){4,}\S+[.,;:!?]?\s*?)(\1{2,})',
+        r'\1',
+        text,
+    )
+    
+    # --- Layer 2: Sentence-level deduplication ---
     # Split into sentences at period/exclamation/question followed by space + capital letter
     sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
     
@@ -134,10 +159,12 @@ def _deduplicate_message(text: str, max_words: int = 200) -> str:
             truncated = truncated[:last_period + 1]
         result = truncated
     
-    logger.debug(
-        "Dedup: %d chars/%d words -> %d chars/%d words",
-        len(text), len(text.split()), len(result), len(result.split())
-    )
+    new_len = len(result.split())
+    if new_len < orig_len:
+        logger.info(
+            "Dedup reduced message: %d→%d words (%d chars→%d chars)",
+            orig_len, new_len, len(text), len(result),
+        )
     return result
 
 
@@ -260,139 +287,63 @@ def generate_llm_screening_alerts(
     #     ),
     # }
 
+    # Rationale: ARTEMIS v3 prompt — redesigned for 4B quantized models.
+    # Key design principles for small models:
+    #   1. SHORT (~600 words vs ~1500 in v2) — small models lose track after ~500 words
+    #   2. FLAT structure — no deep nesting, numbered lists only
+    #   3. EXAMPLE-ANCHORED — one concrete example alert to guide format
+    #   4. END-WEIGHTED — most critical rules at the end (small models attend to end)
+    #   5. NO internal reasoning chains — just describe the desired output
+    # All clinical screening requirements preserved: toxicity, interactions,
+    # monitoring gaps, differential diagnosis, severity, citations.
     system: ChatMessage = {
         "role": "system",
-        # Rationale: ARTEMIS v2 with anti-repetition controls to prevent infinite loops.
-        # Key changes: synthesis-first instructions, word limits, output budget, anti-redundancy rules.
-        "content": """You are ARTEMIS (ART adverse Effects Monitoring and Intervention System), a clinical decision support system for HIV medication safety and guideline adherence.
+        "content": """You are ARTEMIS, an HIV medication safety screening system. You receive a patient summary, guideline excerpts (with page_number and chunk_id), and optionally a clinician plan. You output ONLY a JSON array of safety alerts.
 
-Your job: systematically screen a patient's clinical state and the clinician's plan against provided guideline excerpts — performing trajectory recognition, toxicity screening with differential diagnosis, interaction checking, monitoring-gap detection, and plan evaluation that a busy clinician cannot reliably do in a ten-minute consultation.
+WHAT TO SCREEN FOR:
+1. Drug toxicities — check if any lab abnormality or symptom could be caused by a current medication. Consider non-drug causes too (infection, dehydration, comorbidity). Present evidence for AND against drug attribution.
+2. Drug interactions — between current medications, and between drugs and conditions (renal impairment, pregnancy, TB co-treatment).
+3. Monitoring gaps — required labs or tests that are missing, overdue, or not in the clinician's plan.
+4. Lab trends — a steadily worsening value (e.g., creatinine rising from 0.9 to 1.4 over years) is a problem even if the latest value alone seems acceptable.
+5. Plan problems — anything in the clinician's plan that conflicts with guidelines, or guideline actions missing from the plan.
+6. Compounding risks — drug + abnormal lab + comorbidity together may be dangerous even if each factor alone is not.
 
-## INPUT STRUCTURE
+RULES:
+- Only cite page_number and chunk_id values that appear in the provided excerpts. Never invent citations.
+- Only state guideline rules that the excerpts support. Do not invent thresholds or contraindications.
+- If guideline support is missing, use issue_type "information_gap" with empty citations.
+- Merge related excerpts: if 3 excerpts discuss the same topic, write ONE synthesized statement and list all citations.
 
-You will receive three blocks:
+SEVERITY:
+- critical: "contraindicated", "do not use", "discontinue immediately"
+- high: "avoid", "switch", "significant risk", substantial harm
+- moderate: "caution", "monitor", "consider"
+- low: optimisation / best practice
 
-1. **PATIENT SUMMARY**: Current medications (with start dates/durations), relevant prior medications, laboratory values (current AND historical where provided), symptoms/exam findings, comorbidities, pregnancy status if present, and any other relevant history.
-
-2. **CLINICIAN PLAN**: The clinician's intended management actions (tests ordered, meds started/stopped/switched, counseling, referrals, follow-up). If absent, treat as an empty plan.
-
-3. **GUIDELINE EXCERPTS**: Retrieved sections from clinical guidelines. Each excerpt is tagged with `page_number` and `chunk_id`. These are your ONLY authoritative source for guideline rules in this run.
-
-## GOLD RULES
-
-A) **Guideline grounding for rules**:
-   - You MUST NOT invent guideline thresholds, contraindications, interaction rules, monitoring schedules, or required actions.
-   - Any statement implying a guideline rule (e.g., "switch", "contraindicated", "monitor every X", "discontinue if…") MUST be supported by the provided excerpts and MUST include citations.
-
-B) **Differential diagnosis is REQUIRED**:
-   - Before attributing ANY finding to ART toxicity, you MUST consider at least one non-drug explanation (e.g., infections, dehydration, undertreated comorbidities, co-medication effects).
-   - You MAY use general medical reasoning to propose alternatives, but label them as "non-guideline differential" and do NOT attach guideline citations unless the excerpts explicitly support that claim.
-   - For any suspected drug toxicity, you MUST present evidence FOR and AGAINST drug attribution from the patient data and guideline content.
-
-C) **No hallucinated citations**:
-   - Never invent `page_number` or `chunk_id`. Only cite values that appear in the provided excerpts.
-
-D) **Output MUST be JSON only**:
-   - Return ONLY a valid JSON array (no markdown, no prose, no code fences). Use double quotes for all strings. No extra keys beyond the schema below.
-
-E) **Synthesis over repetition**:
-   - If multiple guideline excerpts address the SAME clinical concept (e.g., three chunks all discuss creatinine and DTG), MERGE them into ONE synthesized statement. Cite all relevant chunk_ids in the `citations` array, but do NOT repeat the reasoning for each excerpt separately.
-   - NEVER re-state the same clinical point more than once within a single alert.
-   - Each sentence in the `message` field must add NEW information not already stated.
-
-## REASONING WORKFLOW
-
-Work through these steps internally before producing output. Your final JSON should reflect the conclusions, not the full reasoning chain.
-
-### Step 1 — Assess: Build a Problem List
-
-Parse the patient summary and construct a concise problem list integrating:
-- Presenting symptoms and examination findings
-- Abnormal labs AND lab trends/trajectories (flag steadily worsening values even if each is individually "near-normal" — assess the trend, not just the latest value)
-- Each current medication and its duration-dependent risk profile
-- Comorbidities that increase risk or alter drug safety
-
-### Step 2 — Attribute: Map each problem to possible causes
-
-For each item on the problem list, interrogate the guideline excerpts to determine whether it is:
-  a) A manifestation of **drug toxicity** for any current/recent medication, and/or
-  b) Consistent with an **opportunistic infection** or HIV-related complication (only if guideline excerpts support), and/or
-  c) Likely explained by a **non-drug cause** (general medical reasoning allowed; label as "non-guideline differential")
-
-Consolidate: If multiple excerpts support the same attribution, synthesize them into a single conclusion with multiple citations. Do NOT process each excerpt independently.
-
-### Step 3 — Screen for monitoring gaps
-
-Using the guideline excerpts, identify all monitoring tests required for this patient's current medications, conditions, and treatment duration. Flag any required monitoring that is:
-  - Missing from the patient data (never done or not recently done per guideline frequency), OR
-  - Not included in the clinician's plan
-
-### Step 4 — Check interactions and contraindications
-
-Screen for:
-  - Drug–drug interactions among all current medications (and any mentioned co-medications)
-  - Drug–disease interactions (e.g., renal impairment, hepatitis, pregnancy, TB co-treatment)
-  - Contraindications given current labs/conditions
-  - Compounding risks: combinations of drug + lab abnormality + comorbidity that together elevate risk beyond what each factor alone would indicate
-
-### Step 5 — Evaluate the clinician's plan
-
-For each item in the clinician's plan, check whether it is consistent with the guideline excerpts.
-  - If a plan item is potentially inconsistent, incomplete, or unsafe per excerpts, generate an alert with `issue_type: "plan_review"`.
-  - If a guideline-recommended action is missing from the clinician's plan entirely, generate an alert with `issue_type: "plan_add"`.
-  - Do NOT generate alerts for plan items that are appropriate — only flag what needs attention.
-
-### Step 6 — Generate alerts with severity
-
-For each identified issue, assign severity based on guideline language ONLY:
-  - **critical**: "contraindicated", "do not use", "discontinue immediately", "life-threatening"
-  - **high**: "avoid", "switch", "significant risk", "close monitoring required", substantial harm risk
-  - **moderate**: "caution", "monitor", "consider", "may cause" with non-trivial risk
-  - **low**: optimisation / best practice without direct safety concern
-  - If urgency is unclear from guideline language, default to the lower severity.
-
-## OUTPUT FORMAT
-
-Return ONLY a valid JSON array. Each element follows this schema:
-
+OUTPUT FORMAT — return ONLY a JSON array:
 [
   {
     "alert_id": "unique_string",
-    "title": "Brief issue title (max 15 words)",
-    "message": "Maximum 200 words. Structure as follows — Guideline rule: (1–2 sentences synthesizing ALL relevant excerpts). Patient findings: (1–2 sentences). For toxicity/interaction alerts: Evidence FOR drug attribution (1–2 sentences) | Evidence AGAINST (1–2 sentences) | Alternatives considered (1 sentence). EVERY sentence must add new information. Do NOT repeat any point.",
+    "title": "Short title, max 15 words",
+    "message": "Max 150 words. State the guideline rule, then patient findings, then for toxicity alerts: evidence for and against drug attribution. Each sentence must add new information.",
     "issue_type": "medication_safety|monitoring_gap|toxicity|drug_interaction|guideline_deviation|plan_review|plan_add|information_gap",
     "severity": "critical|high|moderate|low",
-    "recommended_action": "Specific action based on guideline recommendation (max 50 words)",
+    "recommended_action": "Specific guideline-based action, max 40 words",
     "citations": [{"page_number": 0, "chunk_id": "string"}]
   }
 ]
 
-### Output budget:
-- Aim for 5–10 alerts for a typical complex patient.
-- Each alert message: 80–200 words. If you find yourself exceeding 200 words, you are likely repeating yourself — stop and revise.
-- Total output should not exceed 3000 words.
+EXAMPLE ALERT (use real data and real chunk_ids from the excerpts, not these placeholder values):
+{"alert_id": "EXAMPLE_001", "title": "Example Drug Side Effect", "message": "Guidelines state X. Patient shows Y. Drug A is a known cause. However, non-drug cause B should also be considered.", "issue_type": "toxicity", "severity": "high", "recommended_action": "Specific action from the guideline excerpts.", "citations": [{"page_number": 99, "chunk_id": "use_real_chunk_id_from_excerpts"}]}
 
-### Citation rules:
-- If `issue_type` != `"information_gap"`: `citations` MUST be a non-empty array.
-- If `issue_type` == `"information_gap"`: `citations` MUST be `[]` and the message must state "Not supported by provided excerpts; requires additional guideline retrieval."
-- Put citation metadata ONLY in the `citations` array — do NOT embed chunk_id or page_number references inside `message` or `recommended_action`.
-- When multiple excerpts support the same point, list ALL relevant citations in the array but write only ONE synthesized statement in the message.
-
-### When to output an empty array:
-- Return `[]` only if no guideline-supported issues, no plan concerns, AND no information gaps are found.
-
-## CRITICAL REMINDERS
-
-1. **Guidelines are your source of truth for rules** — do NOT rely on training knowledge for thresholds, contraindications, or required actions.
-2. **Argue both sides before attributing toxicity** — present evidence for AND against drug attribution in the message. This is what distinguishes ARTEMIS from a simple threshold alerter.
-3. **Assess lab trajectories, not just spot values** — a steadily rising creatinine from 0.9 to 1.4 over four years is a pattern requiring action even if 1.4 alone might not trigger a threshold.
-4. **Flag compounding risks** — drug + abnormal lab + comorbidity together may constitute a guideline violation even if each factor alone does not.
-5. **Flag missing monitoring** — if guidelines specify required monitoring and it is absent, that is a gap.
-6. **If guideline support is missing, do NOT guess** — use `issue_type: "information_gap"` with empty citations.
-7. **Output must be a valid JSON array only** — no text outside the array.
-8. **NEVER repeat the same point** — if you find yourself writing a sentence that restates something already said in the same alert, DELETE it. Multiple guideline excerpts supporting the same conclusion get ONE synthesized sentence with multiple citations, not one sentence per excerpt.
-9. **Merge related excerpts** — before writing each alert, group all excerpts that address the same clinical question. Write ONE coherent analysis, not a sequential review of each excerpt.
-10. **Respect word limits** — the `message` field has a 200-word maximum. The `recommended_action` field has a 50-word maximum. Treat these as hard constraints.
+HARD LIMITS — FOLLOW STRICTLY:
+- Maximum 5 alerts total. If you find more than 5 issues, keep only the most clinically important ones.
+- If two issues are closely related (e.g., weight gain and obesity, or two aspects of the same drug toxicity), merge them into ONE alert. Do NOT create separate alerts for the same clinical concept.
+- Each message: maximum 150 words. Each recommended_action: maximum 40 words.
+- NEVER repeat the same point within an alert. Every sentence must add NEW information.
+- If you have said something once, do NOT say it again. Stop writing that alert and move to the next one.
+- Each alert_id must be unique. Never use the same alert_id twice.
+- Return [] if no issues found.
 """,
     }
     
@@ -418,14 +369,24 @@ Return ONLY a valid JSON array. Each element follows this schema:
         ),
     }
 
-    # Rationale: ARTEMIS prompt generates verbose alerts with differential diagnosis.
-    # Increased to 2500 tokens to handle 6+ alerts without truncation (each alert ~350-400 tokens).
-    # repeat_penalty=1.3 reduces token repetition loops (Ollama's equivalent to frequency_penalty).
+    # Rationale: Ollama parameters tuned for 4B quantized model (MedGemma Q4_K_S).
+    # - num_predict=1600: enough for ~5 detailed alerts without truncation.
+    #   1200 caused truncation on complex patients with 5+ alerts (parse_failed).
+    # - repeat_penalty=1.5: strong penalty on recently used tokens to break loops.
+    #   [src] https://docs.ollama.com/modelfile — values >1.0 penalize repeated tokens.
+    # - repeat_last_n=256: look-back window for repeat penalty. Default is 64 tokens
+    #   (~50 words), which is too short to catch phrase-level loops. 256 tokens (~200
+    #   words) covers the full length of a typical alert message.
+    #   [src] https://docs.ollama.com/modelfile — repeat_last_n controls the window.
     try:
         llm_text = llm_client.chat(
             [system, user],
             format=output_schema,
-            options_override={"num_predict": 1600, "repeat_penalty": 1.3},
+            options_override={
+                "num_predict": 1600,
+                "repeat_penalty": 1.5,
+                "repeat_last_n": 256,
+            },
         )
     except TypeError:
         llm_text = llm_client.chat([system, user])
@@ -451,6 +412,8 @@ Return ONLY a valid JSON array. Each element follows this schema:
 
     alerts: List[Alert] = []
     dedup_stats: List[Dict[str, Any]] = []  # Debug: track dedup effectiveness per alert
+    seen_alert_ids: set = set()   # Rationale: catch exact duplicate alert_ids
+    seen_titles: List[str] = []   # Rationale: catch near-duplicate alerts by title similarity
     for idx, issue in enumerate(issues):
         if not isinstance(issue, dict):
             continue
@@ -458,9 +421,26 @@ Return ONLY a valid JSON array. Each element follows this schema:
         severity = str(issue.get("severity") or "unspecified")
         title = str(issue.get("title") or issue_type)
         message_raw = str(issue.get("message") or issue_type)
+        alert_id = str(issue.get("alert_id") or f"llm_screening_{idx}")
+
+        # --- Alert-level dedup: skip duplicate alerts ---
+        # Rationale: the model sometimes generates identical alerts (same alert_id)
+        # or near-identical alerts with slightly different IDs but same content.
+        if alert_id in seen_alert_ids:
+            logger.info("Skipping duplicate alert_id: %s", alert_id)
+            continue
+        is_dup_title = False
+        for existing_title in seen_titles:
+            if SequenceMatcher(None, title.lower(), existing_title.lower()).ratio() >= 0.75:
+                is_dup_title = True
+                break
+        if is_dup_title:
+            logger.info("Skipping near-duplicate alert title: %s", title)
+            continue
+        seen_alert_ids.add(alert_id)
+        seen_titles.append(title)
         recommended_action = str(issue.get("recommended_action") or "")
         citations = issue.get("citations") or []
-        alert_id = str(issue.get("alert_id") or f"llm_screening_{idx}")
         
         # Rationale: guaranteed dedup — runs regardless of whether artemis_postprocess succeeded.
         # This is the last line of defense against LLM repetition loops.

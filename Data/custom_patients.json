@@ -80,5 +80,45 @@
       "examination_findings": "BP 118/76 mmHg. Weight 64kg (stable). No peripheral oedema. No costovertebral angle tenderness. Otherwise unremarkable.",
       "prior_history": "HIV diagnosed 2018. No diabetes, no hypertension. Adherence consistently >95% by pill count. No known allergies. Takes ibuprofen 400mg occasionally for headaches (approximately 2-3 times per week for the past 6 months due to work stress)."
     }
+  },
+  {
+    "patient_id": "Kintu-Test 001",
+    "age_years": 36,
+    "sex": "F",
+    "art_regimen_current": [
+      "Current ART Regimen: TDF",
+      " 3TC",
+      " DTG (TLD) for 18 months."
+    ],
+    "other_medications": [
+      "None"
+    ],
+    "visits": [
+      {
+        "date": "2026-02-24",
+        "type": "intake",
+        "clinician_note": "Complaints & Symptoms:\n36-year-old woman presents for routine review. Mentions her clothes no longer fit and she has gained 'a lot of weight' since starting her current HIV medication. Also feels more tired than usual.\n\nExamination Findings:\nBP 138/88 mmHg. Weight 82kg. BMI 32.4 kg/m². Waist circumference 96cm. Acanthosis nigricans noted at neck and axillae. No peripheral oedema.\n\nSignificant history prior to today's visit:\nART History: Switched from TDF/3TC/EFV (used for 3 years) to TLD 18 months ago due to EFV-related side effects (dizziness and vivid dreams).\n\nBaseline Metrics (at TLD switch): BP was 118/74 mmHg; Weight was 65kg; BMI was 25.6 kg/m²; Fasting glucose was 92 mg/dL.\n\nComorbidities/Family History: HIV diagnosed 2019. No prior DM or HTN. Family history significant for Type 2 Diabetes (mother)."
+      }
+    ],
+    "labs": {
+      "labs_narrative": [
+        {
+          "date": "2026-02-24",
+          "narrative_text": "Glycemic Markers: Fasting glucose 118 mg/dL (impaired); HbA1c 6.1% (pre-diabetic range). Lipid Profile: Total cholesterol 228 mg/dL, LDL 148 mg/dL, HDL 38 mg/dL, Triglycerides 212 mg/dL. Renal/Virological: Creatinine 0.9 mg/dL; Viral load <50 copies/mL; CD4 612 cells/uL.",
+          "source": "today"
+        }
+      ]
+    },
+    "today_encounter": {
+      "date": "2026-02-24",
+      "note": "",
+      "orders": [],
+      "med_changes": []
+    },
+    "intake": {
+      "complaints_symptoms": "36-year-old woman presents for routine review. Mentions her clothes no longer fit and she has gained 'a lot of weight' since starting her current HIV medication. Also feels more tired than usual.",
+      "examination_findings": "BP 138/88 mmHg. Weight 82kg. BMI 32.4 kg/m². Waist circumference 96cm. Acanthosis nigricans noted at neck and axillae. No peripheral oedema.",
+      "prior_history": "ART History: Switched from TDF/3TC/EFV (used for 3 years) to TLD 18 months ago due to EFV-related side effects (dizziness and vivid dreams).\n\nBaseline Metrics (at TLD switch): BP was 118/74 mmHg; Weight was 65kg; BMI was 25.6 kg/m²; Fasting glucose was 92 mg/dL.\n\nComorbidities/Family History: HIV diagnosed 2019. No prior DM or HTN. Family history significant for Type 2 Diabetes (mother)."
+    }
   }
 ]
