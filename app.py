@@ -811,12 +811,6 @@ def main() -> None:
         """, unsafe_allow_html=True)
 
         new_patient_id = st.text_input("Patient Identifier", key="new_case_patient_id")
-        
-        new_patient_name = st.text_input(
-            "Patient Name",
-            key="new_case_patient_name",
-            help="Full name or pseudonym for the patient"
-        )
 
         col1, col2 = st.columns(2)
         with col1:
@@ -865,18 +859,29 @@ def main() -> None:
 
         st.caption("Optional: enter prior labs, events, and historical notes.")
         new_prior_history = st.text_area(
-            "Prior History",
+            "Significant history prior to today's visit",
             key="new_case_prior_history",
             height=80
         )
 
         st.caption("Optional: enter laboratory results (one result per line).")
-        new_lab_results = st.text_area(
-            "Laboratory Results",
-            key="new_case_lab_results",
+        new_todays_lab_results = st.text_area(
+            "Today's laboratory results",
+            key="new_case_todays_lab_results",
             height=120,
             help=(
-                "Paste one result per line. Supported examples:\n"
+                "Enter today's lab results. Supported examples:\n"
+                "viral_load, 2025-10-01, 40\n"
+                "creatinine, 2024-10-01, 88"
+            ),
+        )
+        
+        new_previous_lab_results = st.text_area(
+            "Previous Laboratory results",
+            key="new_case_previous_lab_results",
+            height=120,
+            help=(
+                "Enter previous lab results. Supported examples:\n"
                 "viral_load, 2025-10-01, 40\n"
                 "creatinine, 2024-10-01, 88"
             ),
@@ -884,11 +889,8 @@ def main() -> None:
 
         if st.button("Add case to patient list"):
             pid = (new_patient_id or "").strip()
-            pname = (new_patient_name or "").strip()
             if not pid:
                 st.error("Patient ID is required.")
-            elif not pname:
-                st.error("Patient Name is required.")
             elif any((p.get("patient_id") == pid) for p in (list(patients) + custom_patients)):
                 st.error("That Patient ID already exists in the current patient list.")
             else:
@@ -957,10 +959,26 @@ def main() -> None:
                         raise ValueError("; ".join(errors))
                     return out
 
+                # Parse both today's and previous lab results
+                labs_parsed = {}
                 try:
-                    labs_parsed = _parse_bulk_labs(new_lab_results)
+                    if new_todays_lab_results:
+                        todays_labs = _parse_bulk_labs(new_todays_lab_results)
+                        # Merge today's labs into labs_parsed
+                        for lab_name, entries in todays_labs.items():
+                            labs_parsed.setdefault(lab_name, []).extend(entries)
                 except ValueError as exc:
-                    st.error(str(exc))
+                    st.error(f"Error in today's lab results: {str(exc)}")
+                    st.stop()
+                
+                try:
+                    if new_previous_lab_results:
+                        previous_labs = _parse_bulk_labs(new_previous_lab_results)
+                        # Merge previous labs into labs_parsed
+                        for lab_name, entries in previous_labs.items():
+                            labs_parsed.setdefault(lab_name, []).extend(entries)
+                except ValueError as exc:
+                    st.error(f"Error in previous lab results: {str(exc)}")
                     st.stop()
 
                 # Parse ART regimen from comma-separated input
@@ -994,7 +1012,6 @@ def main() -> None:
 
                 patient_record: Dict[str, Any] = {
                     "patient_id": pid,
-                    "name": pname,
                     "age_years": new_age if new_age is not None else None,
                     "sex": new_sex if new_sex else None,
                     "art_regimen_current": art_regimen,
@@ -1027,7 +1044,7 @@ def main() -> None:
                     )
                 if patient_record["intake"]["prior_history"]:
                     legacy_note_parts.append(
-                        f"Prior History:\n{patient_record['intake']['prior_history']}"
+                        f"Significant history prior to today's visit:\n{patient_record['intake']['prior_history']}"
                     )
 
                 if legacy_note_parts:
@@ -1046,7 +1063,7 @@ def main() -> None:
                 _save_custom_patients(CUSTOM_PATIENTS_PATH, custom_patients)
                 # Rationale: auto-select the newly added patient to make it clear
                 # the add succeeded.
-                st.session_state["selected_patient_label"] = f"{pid} - {patient_record['name']}"
+                st.session_state["selected_patient_label"] = pid
                 # Rationale: clear the Add patient case form after success to allow rapid entry.
                 st.session_state["add_case_flash_success"] = "Case added."
                 st.session_state["reset_add_case_form"] = True
@@ -1173,10 +1190,10 @@ def main() -> None:
                 st.markdown("None recorded")
             st.markdown("")
 
-            # Section 6: Prior History
+            # Section 6: Significant history prior to today's visit
             st.markdown("""
                 <div style='background-color: #F5F0FF; padding: 15px; border-radius: 8px; border-left: 4px solid #7B68AB; margin-bottom: 15px;'>
-                    <h4 style='color: #7B68AB; margin-top: 0;'>6. Prior History</h4>
+                    <h4 style='color: #7B68AB; margin-top: 0;'>6. Significant history prior to today's visit</h4>
                 </div>
             """, unsafe_allow_html=True)
             prior_history = intake.get('prior_history', '')
@@ -1185,23 +1202,55 @@ def main() -> None:
             else:
                 st.markdown("None recorded")
 
-            # Section 7: Laboratory Results
-            # Rationale: lab results are saved under patient['labs'] but were not displayed in the UI.
+            # Section 7: Today's laboratory results
             st.markdown("""
                 <div style='background-color: #FFF9E6; padding: 15px; border-radius: 8px; border-left: 4px solid #FFC107; margin-bottom: 15px;'>
-                    <h4 style='color: #856404; margin-top: 0;'>7. Laboratory Results</h4>
+                    <h4 style='color: #856404; margin-top: 0;'>7. Today's laboratory results</h4>
                 </div>
             """, unsafe_allow_html=True)
             labs_raw = patient.get("labs") or {}
-            # Display narrative lab text if present (preserves complete input)
+            encounter_date_str = patient.get("today_encounter", {}).get("date", "")
+            
+            # Display today's narrative lab text
+            todays_labs_found = False
             if "labs_narrative" in labs_raw:
                 narrative_entries = labs_raw.get("labs_narrative", [])
                 for entry in narrative_entries:
                     if isinstance(entry, dict):
-                        narrative = entry.get("narrative_text", "")
-                        if narrative:
-                            st.markdown(narrative)
-            else:
+                        entry_date = entry.get("date", "")
+                        if entry_date == encounter_date_str:
+                            narrative = entry.get("narrative_text", "")
+                            if narrative:
+                                st.markdown(narrative)
+                                todays_labs_found = True
+            
+            if not todays_labs_found:
+                st.markdown("None recorded")
+            st.markdown("")
+            
+            # Section 8: Previous Laboratory results
+            st.markdown("""
+                <div style='background-color: #E6F3FF; padding: 15px; border-radius: 8px; border-left: 4px solid #4A90E2; margin-bottom: 15px;'>
+                    <h4 style='color: #2E5C8A; margin-top: 0;'>8. Previous Laboratory results</h4>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            # Display previous narrative lab text
+            previous_labs_found = False
+            if "labs_narrative" in labs_raw:
+                narrative_entries = labs_raw.get("labs_narrative", [])
+                for entry in narrative_entries:
+                    if isinstance(entry, dict):
+                        entry_date = entry.get("date", "")
+                        if entry_date != encounter_date_str:
+                            narrative = entry.get("narrative_text", "")
+                            if narrative:
+                                st.markdown(f"**{entry_date}:**")
+                                st.markdown(narrative)
+                                st.markdown("")
+                                previous_labs_found = True
+            
+            if not previous_labs_found:
                 st.markdown("None recorded")
 
         # Rationale: clinicians may need to remove a custom test case and re-enter it.

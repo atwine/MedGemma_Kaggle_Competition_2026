@@ -229,7 +229,7 @@ def _retrieve_evidence(
     except Exception:
         patient_ctx = None  # type: ignore[assignment]
 
-    notes_excerpt = patient_notes[:500] if patient_notes else ""
+    notes_excerpt = patient_notes if patient_notes else ""
 
     bundles: List[EvidenceBundle] = []
 
@@ -367,7 +367,7 @@ def _reason(
         notes_text = ""
         try:
             ctx = build_patient_context(patient)
-            notes_text = (ctx.notes_text or "").strip()[:600]
+            notes_text = (ctx.notes_text or "")
         except Exception:
             pass
 
@@ -743,7 +743,7 @@ def _reason_updated_management_plan(
         notes_text = ""
         try:
             ctx = build_patient_context(patient)
-            notes_text = (ctx.notes_text or "").strip()[:600]
+            notes_text = (ctx.notes_text or "")
         except Exception:
             pass
 

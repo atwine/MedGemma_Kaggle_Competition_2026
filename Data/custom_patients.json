@@ -36,5 +36,42 @@
       "examination_findings": "BP 148/92 mmHg. Weight 78kg (was 82kg 6 months ago). Mild bilateral pedal oedema. No ascites. Fundoscopy: mild hypertensive changes, no diabetic retinopathy.",
       "prior_history": "HIV diagnosed 2020. Type 2 diabetes mellitus diagnosed 2019, on metformin 1g BD and glibenclamide 5mg BD. Hypertension diagnosed 2021, on amlodipine 10mg OD and lisinopril 10mg OD. Completed TB treatment (2RHZE/4RH) in 2022. Takes co-trimoxazole 960mg OD for prophylaxis. Recent course of gentamicin IM for presumed UTI 6 weeks ago (given at local clinic)."
     }
+  },
+  {
+    "patient_id": "P006",
+    "age_years": 29,
+    "sex": "F",
+    "art_regimen_current": [
+      "TDF/3TC/DTG (TLD) initiated 10 weeks ago."
+    ],
+    "other_medications": [
+      "None. Newly diagnosed HIV."
+    ],
+    "visits": [
+      {
+        "date": "2026-02-24",
+        "type": "intake",
+        "clinician_note": "Complaints & Symptoms:\n29-year-old woman presents for routine 3-month follow-up after initiating ART. No complaints. Feeling well, energy improved since starting treatment.\n\nExamination Findings:\nBP 110/70 mmHg. Weight 68kg (pre-pregnancy weight 62kg). Fundal height appropriate for dates. Fetal movements present. No oedema. Urine dipstick negative for protein.\n\nPrior History:\nHIV diagnosed 10 weeks ago during antenatal screening. Currently 22 weeks pregnant (second pregnancy, first child alive and well). No other medical conditions. No regular medications prior to ART. Taking ferrous sulfate and folic acid as prescribed."
+      }
+    ],
+    "labs": {
+      "labs_narrative": [
+        {
+          "date": "2026-02-24",
+          "narrative_text": "Creatinine: 1.1 mg/dL (baseline before ART: 0.8 mg/dL). eGFR: 78 mL/min/1.73m2. Urinalysis: Normal, no protein, no glucose. Viral load: 89 copies/mL (down from 125,000 at diagnosis). CD4: 389 cells/uL (was 312 at diagnosis). Hb: 10.8 g/dL. Phosphate: 3.8 mg/dL (normal)."
+        }
+      ]
+    },
+    "today_encounter": {
+      "date": "2026-02-24",
+      "note": "",
+      "orders": [],
+      "med_changes": []
+    },
+    "intake": {
+      "complaints_symptoms": "29-year-old woman presents for routine 3-month follow-up after initiating ART. No complaints. Feeling well, energy improved since starting treatment.",
+      "examination_findings": "BP 110/70 mmHg. Weight 68kg (pre-pregnancy weight 62kg). Fundal height appropriate for dates. Fetal movements present. No oedema. Urine dipstick negative for protein.",
+      "prior_history": "HIV diagnosed 10 weeks ago during antenatal screening. Currently 22 weeks pregnant (second pregnancy, first child alive and well). No other medical conditions. No regular medications prior to ART. Taking ferrous sulfate and folic acid as prescribed."
+    }
   }
 ]

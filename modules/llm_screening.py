@@ -247,7 +247,7 @@ def generate_llm_screening_alerts(
     user: ChatMessage = {
         "role": "user",
         "content": (
-            f"Patient: {patient_context.name} ({patient_context.patient_id})\n"
+            f"Patient ID: {patient_context.patient_id}\n"
             f"Encounter date: {patient_context.encounter_date.isoformat()}\n\n"
             "Raw clinical history (concatenated notes_text):\n"
             f"{patient_context.notes_text}\n\n"

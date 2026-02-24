@@ -120,8 +120,8 @@ class RagEngine:
     def _build_query(self, *, patient_context: PatientContext, alert: Alert) -> str:
         # Rationale: We keep query building simple and transparent for auditability.
         regimen = ", ".join(patient_context.art_regimen_current) or "unknown regimen"
-        notes_text = (patient_context.notes_text or "").strip()
-        note_excerpt = notes_text[:500]
+        notes_text = (patient_context.notes_text or "")
+        note_excerpt = notes_text
 
         # Rationale: manual cases may only contain key facts (e.g., TDF, phosphate, DEXA)
         # later in a long history note; extract a small keyword set from the full text

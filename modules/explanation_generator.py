@@ -205,7 +205,7 @@ def generate_stage3_synthesis_issues(
     user: ChatMessage = {
         "role": "user",
         "content": (
-            f"Patient: {patient_context.name} ({patient_context.patient_id})\n"
+            f"Patient ID: {patient_context.patient_id}\n"
             f"Encounter date: {patient_context.encounter_date.isoformat()}\n\n"
             "Stage 1 alerts (deterministic JSON):\n"
             f"{json.dumps(stage1, ensure_ascii=False)}\n\n"
@@ -302,7 +302,7 @@ def _try_llm_explanation(
     user: ChatMessage = {
         "role": "user",
         "content": (
-            f"Patient: {patient_context.name} ({patient_context.patient_id})\n"
+            f"Patient ID: {patient_context.patient_id}\n"
             f"Encounter date: {patient_context.encounter_date.isoformat()}\n"
             f"Current ART regimen: {regimen}\n\n"
             f"Alert title: {alert.title}\n"
@@ -352,10 +352,10 @@ def _try_llm_audit_checklist(
     user: ChatMessage = {
         "role": "user",
         "content": (
-            f"Patient: {patient_context.name} ({patient_context.patient_id})\n"
+            f"Patient ID: {patient_context.patient_id}\n"
             f"Encounter date: {patient_context.encounter_date.isoformat()}\n"
             f"Current ART regimen: {regimen}\n\n"
-            f"Notes excerpt: {(patient_context.notes_text or '').strip()[:800]}\n\n"
+            f"Notes: {(patient_context.notes_text or '')}\n\n"
             "Guideline excerpts (use these for citations):\n"
             f"{chunks_block}\n\n"
             "Create a visit audit checklist: things that should be checked in this visit (labs/monitoring/questions) based on the patient context and the excerpts. "

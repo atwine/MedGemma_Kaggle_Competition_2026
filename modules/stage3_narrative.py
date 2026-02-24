@@ -55,7 +55,7 @@ def generate_stage3_narrative(
     user: ChatMessage = {
         "role": "user",
         "content": (
-            f"Patient: {patient_context.name} ({patient_context.patient_id})\n"
+            f"Patient ID: {patient_context.patient_id}\n"
             f"Encounter date: {patient_context.encounter_date.isoformat()}\n\n"
             "Stage 1 summary JSON:\n"
             f"{json.dumps(stage1_summary, ensure_ascii=False)}\n\n"

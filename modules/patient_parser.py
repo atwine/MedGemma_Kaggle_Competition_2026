@@ -33,7 +33,6 @@ class LabResult:
 @dataclass(frozen=True)
 class PatientContext:
     patient_id: str
-    name: str
     encounter_date: date
     art_regimen_current: List[str]
     notes_text: str
@@ -100,7 +99,6 @@ def build_patient_context(patient: Dict[str, Any]) -> PatientContext:
 
     return PatientContext(
         patient_id=str(patient.get("patient_id")),
-        name=str(patient.get("name")),
         encounter_date=encounter_date,
         art_regimen_current=art_regimen_current,
         notes_text=notes_text,
