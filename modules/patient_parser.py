@@ -197,8 +197,15 @@ def compute_lab_trends(
                 continue
             if encounter_date is not None and d > encounter_date:
                 continue
+            # Rationale: keep the original saved lab value text for display.
+            raw_val = None
+            for k, v in (e or {}).items():
+                if k == "date":
+                    continue
+                raw_val = v
+                break
             numeric = _extract_numeric(e)
-            parsed.append({"date": e["date"], "value": numeric, "date_obj": d})
+            parsed.append({"date": e["date"], "value": numeric, "raw": raw_val, "date_obj": d})
 
         parsed.sort(key=lambda x: x["date_obj"])
 
@@ -227,8 +234,9 @@ def compute_lab_trends(
         # Build a human-readable summary line.
         parts: List[str] = []
         for p in parsed:
-            val = p["value"]
-            val_str = str(val) if val is not None else "?"
+            raw = p.get("raw")
+            val = p.get("value")
+            val_str = str(raw) if raw is not None else (str(val) if val is not None else "?")
             parts.append(f"{val_str} ({p['date']})")
         timeline = " -> ".join(parts) if parts else "no data"
         summary_text = f"{lab_name}: {timeline} — {direction}"

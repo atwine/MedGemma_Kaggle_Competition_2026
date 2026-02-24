@@ -907,29 +907,21 @@ def main() -> None:
                     iso_date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
                     for idx, ln in enumerate((raw_text or "").splitlines(), start=1):
-                        s = (ln or "").strip()
-                        if not s:
+                        s = (ln or "")
+                        if not s.strip():
                             continue
 
                         # Only treat as structured CSV if the 2nd token is a valid ISO date.
-                        parts = [p.strip() for p in s.split(",") if p.strip()]
-                        if len(parts) >= 3 and iso_date_re.match(parts[1] or ""):
-                            lab_raw, date_str, value_str = parts[0], parts[1], parts[2]
+                        # Rationale: preserve the lab value exactly as typed (no numeric conversion,
+                        # no removal of symbols like '<' / '>', no unit conversion).
+                        parts = s.split(",", 2)
+                        if len(parts) == 3 and iso_date_re.match(parts[1].strip() or ""):
+                            lab_raw, date_str, value_str = parts[0], parts[1].strip(), parts[2]
                             try:
                                 datetime.date.fromisoformat(date_str)
                             except Exception:
                                 errors.append(f"Labs: line {idx} has invalid date '{date_str}'")
                                 continue
-
-                            try:
-                                v = float(str(value_str).replace("<", "").replace(">", "").strip())
-                            except Exception:
-                                errors.append(
-                                    f"Labs: line {idx} has invalid numeric value '{value_str}'"
-                                )
-                                continue
-                            if v.is_integer():
-                                v = int(v)
 
                             low = (lab_raw or "").strip().lower().replace(" ", "_")
                             if low in {"viral_load", "viral", "vl"}:
@@ -939,51 +931,27 @@ def main() -> None:
                                 lab_name = "creatinine"
                                 value_key = "value_umol_per_l"
                             else:
-                                lab_name = re.sub(r"[^a-z0-9_]+", "_", low).strip("_") or low
+                                lab_name = (lab_raw or "") or low
                                 value_key = "value"
 
-                            out.setdefault(lab_name, []).append({"date": date_str, value_key: v})
+                            out.setdefault(lab_name, []).append({"date": date_str, value_key: value_str})
                             continue
 
                         # Non-structured line: treat as narrative text; we'll extract key labs via regex below.
                         narrative_lines.append(s)
 
-                    # If the user pasted narrative labs (single paragraph), extract key labs.
+                    # If the user pasted narrative labs (single paragraph), save entire text as-is.
+                    # Rationale: preserve ALL lab data exactly as entered, including historical values,
+                    # additional tests, and context that would be lost by regex extraction.
                     if narrative_lines:
                         narrative_text = " ".join(narrative_lines)
-
-                        # Rationale: when no explicit date is provided, default to encounter date so
-                        # downstream logic (days_since_lab, trend extraction) has a usable timestamp.
                         default_date = encounter_iso
-
-                        # Creatinine: support mg/dL (convert to µmol/L) and raw numeric (assumed µmol/L).
-                        m = re.search(
-                            r"creatinine\s*[:=]\s*([<>]?\s*\d+(?:\.\d+)?)\s*(mg/dl)?",
-                            narrative_text,
-                            flags=re.IGNORECASE,
+                        
+                        # Save the complete narrative text under a generic "labs_narrative" key
+                        # so nothing is lost and the doctor can see exactly what was entered.
+                        out.setdefault("labs_narrative", []).append(
+                            {"date": default_date, "narrative_text": narrative_text}
                         )
-                        if m:
-                            val = float(m.group(1).replace("<", "").replace(">", "").strip())
-                            unit = (m.group(2) or "").strip().lower()
-                            if unit == "mg/dl":
-                                val = val * 88.4
-                            val_out: Any = int(val) if float(val).is_integer() else round(val, 2)
-                            out.setdefault("creatinine", []).append(
-                                {"date": default_date, "value_umol_per_l": val_out}
-                            )
-
-                        # Viral load: handle "<50" by storing numeric 50.
-                        m = re.search(
-                            r"viral\s*load\s*[:=]\s*([<>]?\s*\d+(?:\.\d+)?)",
-                            narrative_text,
-                            flags=re.IGNORECASE,
-                        )
-                        if m:
-                            val = float(m.group(1).replace("<", "").replace(">", "").strip())
-                            val_out: Any = int(val) if float(val).is_integer() else round(val, 2)
-                            out.setdefault("viral_load", []).append(
-                                {"date": default_date, "value_copies_per_ml": val_out}
-                            )
 
                     if errors:
                         raise ValueError("; ".join(errors))
@@ -996,30 +964,32 @@ def main() -> None:
                     st.stop()
 
                 # Parse ART regimen from comma-separated input
+                # Rationale: preserve exact text as entered (no .strip())
                 art_regimen = []
                 if new_art_regimen:
                     art_regimen = [
-                        drug.strip()
+                        drug
                         for drug in new_art_regimen.split(",")
-                        if drug.strip()
+                        if drug
                     ]
 
                 # Parse other medications (support both newline and comma-separated)
+                # Rationale: preserve exact text as entered (no .strip())
                 other_meds = []
                 if new_other_meds:
-                    other_meds_text = (new_other_meds or "").strip()
+                    other_meds_text = (new_other_meds or "")
                     # Try newline-separated first, then comma-separated
                     if "\n" in other_meds_text:
                         other_meds = [
-                            med.strip()
+                            med
                             for med in other_meds_text.split("\n")
-                            if med.strip()
+                            if med
                         ]
                     else:
                         other_meds = [
-                            med.strip()
+                            med
                             for med in other_meds_text.split(",")
-                            if med.strip()
+                            if med
                         ]
 
                 patient_record: Dict[str, Any] = {
@@ -1038,9 +1008,9 @@ def main() -> None:
                         "med_changes": [],
                     },
                     "intake": {
-                        "complaints_symptoms": (new_complaints or "").strip(),
-                        "examination_findings": (new_exam_findings or "").strip(),
-                        "prior_history": (new_prior_history or "").strip(),
+                        "complaints_symptoms": (new_complaints or ""),
+                        "examination_findings": (new_exam_findings or ""),
+                        "prior_history": (new_prior_history or ""),
                     },
                 }
 
@@ -1158,24 +1128,6 @@ def main() -> None:
             if art_regimen:
                 regimen_str = ", ".join(art_regimen)
                 st.markdown(f"**Regimen:** <span style='color: #2E86AB; font-weight: 600;'>{regimen_str}</span>", unsafe_allow_html=True)
-                
-                # Calculate duration if regimen_history exists
-                regimen_history = patient.get('regimen_history', [])
-                duration_years = _calculate_regimen_duration(regimen_history)
-                if duration_years is not None:
-                    st.markdown(f"**Duration:** {duration_years:.1f} years (since {regimen_history[-1].get('start_date', 'unknown')})")
-                else:
-                    st.markdown("**Duration:** Not recorded")
-                
-                # Show previous regimens if available
-                if regimen_history and len(regimen_history) > 1:
-                    prev_regimens = []
-                    for i, reg in enumerate(regimen_history[:-1]):
-                        reg_str = ", ".join(reg.get('regimen', []))
-                        start = reg.get('start_date', 'unknown')
-                        end = reg.get('end_date', 'ongoing')
-                        prev_regimens.append(f"{reg_str} ({start} to {end})")
-                    st.markdown(f"**Previous regimens:** {'; '.join(prev_regimens)}")
             else:
                 st.markdown("**Regimen:** None recorded")
             st.markdown("")
@@ -1201,7 +1153,7 @@ def main() -> None:
                 </div>
             """, unsafe_allow_html=True)
             intake = patient.get('intake', {})
-            complaints = intake.get('complaints_symptoms', '').strip()
+            complaints = intake.get('complaints_symptoms', '')
             if complaints:
                 st.markdown(complaints)
             else:
@@ -1214,7 +1166,7 @@ def main() -> None:
                     <h4 style='color: #52B788; margin-top: 0;'>5. Examination Findings</h4>
                 </div>
             """, unsafe_allow_html=True)
-            exam_findings = intake.get('examination_findings', '').strip()
+            exam_findings = intake.get('examination_findings', '')
             if exam_findings:
                 st.markdown(exam_findings)
             else:
@@ -1227,7 +1179,7 @@ def main() -> None:
                     <h4 style='color: #7B68AB; margin-top: 0;'>6. Prior History</h4>
                 </div>
             """, unsafe_allow_html=True)
-            prior_history = intake.get('prior_history', '').strip()
+            prior_history = intake.get('prior_history', '')
             if prior_history:
                 st.markdown(prior_history)
             else:
@@ -1241,45 +1193,14 @@ def main() -> None:
                 </div>
             """, unsafe_allow_html=True)
             labs_raw = patient.get("labs") or {}
-            lab_lines: List[str] = []
-            if isinstance(labs_raw, dict):
-                for lab_name, entries in labs_raw.items():
-                    if not isinstance(entries, list) or not entries:
-                        continue
-
-                    parsed = []
-                    for e in entries:
-                        if not isinstance(e, dict):
-                            continue
-                        d_str = (e.get("date") or "").strip()
-                        if not d_str:
-                            continue
-                        try:
-                            d_obj = datetime.date.fromisoformat(d_str)
-                        except Exception:
-                            continue
-
-                        val = None
-                        for k, v in e.items():
-                            if k == "date":
-                                continue
-                            val = v
-                            break
-
-                        parsed.append((d_obj, d_str, val))
-
-                    if not parsed:
-                        continue
-                    parsed.sort(key=lambda x: x[0])
-                    tail = parsed[-3:]
-                    timeline = " → ".join(
-                        [f"{v if v is not None else '?'} ({ds})" for _, ds, v in tail]
-                    )
-                    label = str(lab_name).replace("_", " ").strip().title() or str(lab_name)
-                    lab_lines.append(f"- **{label}:** {timeline}")
-
-            if lab_lines:
-                st.markdown("\n".join(lab_lines))
+            # Display narrative lab text if present (preserves complete input)
+            if "labs_narrative" in labs_raw:
+                narrative_entries = labs_raw.get("labs_narrative", [])
+                for entry in narrative_entries:
+                    if isinstance(entry, dict):
+                        narrative = entry.get("narrative_text", "")
+                        if narrative:
+                            st.markdown(narrative)
             else:
                 st.markdown("None recorded")
 

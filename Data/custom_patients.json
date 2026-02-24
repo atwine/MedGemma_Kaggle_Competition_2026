@@ -1,47 +1,40 @@
 [
   {
     "patient_id": "P005",
-    "name": "James Doe",
-    "age_years": 38,
-    "sex": "F",
+    "name": "John Doez",
+    "age_years": 53,
+    "sex": "M",
     "art_regimen_current": [
-      "TDF/3TC/DTG (TLD)"
+      "TDF/3TC/DTG (TLD) for 4 years."
     ],
     "other_medications": [
-      "AZT/3TC/NVP for 2 years (2018-2020)",
-      "switched to TLD in 2020 due to national guideline transition."
+      "None. ART-naive when started on TLD."
     ],
     "visits": [
       {
-        "date": "2026-02-22",
+        "date": "2026-02-24",
         "type": "intake",
-        "clinician_note": "Complaints & Symptoms:\n38-year-old woman presents for routine 6-monthly review. No specific complaints. Mentions mild fatigue over the past 2 months which she attributes to her busy work schedule.\n\nExamination Findings:\nBP 118/76 mmHg. Weight 64kg (stable). No peripheral oedema. No costovertebral angle tenderness. Otherwise unremarkable.\n\nPrior History:\nHIV diagnosed 2018. No diabetes, no hypertension. Adherence consistently >95% by pill count. No known allergies. Takes ibuprofen 400mg occasionally for headaches (approximately 2-3 times per week for the past 6 months due to work stress)."
+        "clinician_note": "Complaints & Symptoms:\n52-year-old man presents with 3-week history of generalized weakness and decreased appetite. Also notes his urine appears 'foamy' recently.\n\nExamination Findings:\nBP 148/92 mmHg. Weight 78kg (was 82kg 6 months ago). Mild bilateral pedal oedema. No ascites. Fundoscopy: mild hypertensive changes, no diabetic retinopathy.\n\nPrior History:\nHIV diagnosed 2020. Type 2 diabetes mellitus diagnosed 2019, on metformin 1g BD and glibenclamide 5mg BD. Hypertension diagnosed 2021, on amlodipine 10mg OD and lisinopril 10mg OD. Completed TB treatment (2RHZE/4RH) in 2022. Takes co-trimoxazole 960mg OD for prophylaxis. Recent course of gentamicin IM for presumed UTI 6 weeks ago (given at local clinic)."
       }
     ],
     "labs": {
-      "creatinine": [
+      "labs_narrative": [
         {
-          "date": "2026-02-22",
-          "value_umol_per_l": 123.76
-        }
-      ],
-      "viral_load": [
-        {
-          "date": "2026-02-22",
-          "value_copies_per_ml": 50
+          "date": "2026-02-24",
+          "narrative_text": "Creatinine: 2.8 mg/dL (was 1.3 mg/dL 3 months ago, 1.0 mg/dL 1 year ago). eGFR: 24 mL/min/1.73m2. Urinalysis: Protein 3+, glucose 2+. HbA1c: 8.2%. Fasting glucose: 186 mg/dL. Potassium: 5.4 mEq/L. Phosphate: 2.1 mg/dL (low). Viral load: <50 copies/mL. CD4: 445 cells/uL."
         }
       ]
     },
     "today_encounter": {
-      "date": "2026-02-22",
+      "date": "2026-02-24",
       "note": "",
       "orders": [],
       "med_changes": []
     },
     "intake": {
-      "complaints_symptoms": "38-year-old woman presents for routine 6-monthly review. No specific complaints. Mentions mild fatigue over the past 2 months which she attributes to her busy work schedule.",
-      "examination_findings": "BP 118/76 mmHg. Weight 64kg (stable). No peripheral oedema. No costovertebral angle tenderness. Otherwise unremarkable.",
-      "prior_history": "HIV diagnosed 2018. No diabetes, no hypertension. Adherence consistently >95% by pill count. No known allergies. Takes ibuprofen 400mg occasionally for headaches (approximately 2-3 times per week for the past 6 months due to work stress)."
+      "complaints_symptoms": "52-year-old man presents with 3-week history of generalized weakness and decreased appetite. Also notes his urine appears 'foamy' recently.",
+      "examination_findings": "BP 148/92 mmHg. Weight 78kg (was 82kg 6 months ago). Mild bilateral pedal oedema. No ascites. Fundoscopy: mild hypertensive changes, no diabetic retinopathy.",
+      "prior_history": "HIV diagnosed 2020. Type 2 diabetes mellitus diagnosed 2019, on metformin 1g BD and glibenclamide 5mg BD. Hypertension diagnosed 2021, on amlodipine 10mg OD and lisinopril 10mg OD. Completed TB treatment (2RHZE/4RH) in 2022. Takes co-trimoxazole 960mg OD for prophylaxis. Recent course of gentamicin IM for presumed UTI 6 weeks ago (given at local clinic)."
     }
   }
 ]
