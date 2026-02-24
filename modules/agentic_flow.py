@@ -489,7 +489,9 @@ def _reason_updated_management_plan(
         return None
 
     # Rationale: limit output length to force conciseness while still allowing structured JSON.
-    _PLAN_CHAT_OPTIONS = {"num_predict": 400}
+    # Increased from 400 to 1200 because HuggingFace lacks Ollama's format="json"
+    # constraint, so the model needs more room to produce valid JSON.
+    _PLAN_CHAT_OPTIONS = {"num_predict": 1200}
 
     def _strip_code_fences(text: str) -> str:
         # Rationale: tolerate models that wrap JSON in ```json fences.

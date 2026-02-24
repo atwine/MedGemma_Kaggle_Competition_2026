@@ -322,6 +322,14 @@ class HuggingFaceClient:
                     "content": [{"type": "text", "text": msg["content"]}],
                 })
 
+            # HF JSON fix: Ollama's format="json" forces valid JSON output.
+            # HuggingFace has no equivalent, so we append a short instruction
+            # to the last message to nudge the model toward pure JSON.
+            if format is not None and hf_messages:
+                last = hf_messages[-1]
+                last_text = last["content"][0]["text"]
+                last["content"] = [{"type": "text", "text": last_text + "\n\nRespond with ONLY valid JSON. No markdown, no explanation, no code fences."}]
+
             inputs = self._hf_processor.apply_chat_template(
                 hf_messages,
                 add_generation_prompt=True,
@@ -360,11 +368,29 @@ class HuggingFaceClient:
                 generation = self._hf_model.generate(**inputs, **gen_kwargs)
 
             # Rationale: strip the input tokens to get only the generated output.
-            generation = generation[0][input_len:]
-            decoded = self._hf_processor.decode(generation, skip_special_tokens=True)
+            full_len = generation.shape[-1]
+            new_tokens = generation[0][input_len:]
+            # Diagnostic: log token counts and raw IDs to debug empty output.
+            logger.info(
+                "HF generate: input_len=%d, full_len=%d, new_token_count=%d, "
+                "new_token_ids=%s",
+                input_len, full_len, new_tokens.shape[0],
+                new_tokens[:20].tolist(),  # first 20 token IDs for inspection
+            )
+            decoded = self._hf_processor.decode(new_tokens, skip_special_tokens=True)
+            # Also decode without stripping specials to see what's there.
+            decoded_raw = self._hf_processor.decode(new_tokens, skip_special_tokens=False)
+            logger.info(
+                "HF decode: decoded_len=%d, decoded_raw_len=%d, "
+                "decoded_preview=%.200r, raw_preview=%.200r",
+                len(decoded), len(decoded_raw), decoded[:200], decoded_raw[:200],
+            )
 
             if not decoded or not decoded.strip():
-                self._last_error = "HuggingFace model returned empty output"
+                self._last_error = (
+                    f"HuggingFace model returned empty output "
+                    f"(new_tokens={new_tokens.shape[0]}, raw_preview={decoded_raw[:100]!r})"
+                )
                 return None
 
             return decoded
