@@ -96,8 +96,8 @@ class OllamaClient:
             # Ollama supports passing generation parameters via `options` (e.g., temperature). [src]
             # - https://raw.githubusercontent.com/ollama/ollama/main/docs/api.md
             chat_options: Dict[str, Any] = {
-                "temperature": 0.0,
-                "num_predict": 256,
+                "temperature": 0.2,
+                "num_predict": 128,
             }
             if self._num_ctx is not None:
                 chat_options["num_ctx"] = int(self._num_ctx)
