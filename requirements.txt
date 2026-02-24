@@ -8,6 +8,3 @@ requests
 ollama
 langchain
 pytest
-transformers
-accelerate
-torch

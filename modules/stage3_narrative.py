@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 import json
 
-from modules.llm_client import ChatMessage, OllamaClient, HuggingFaceClient
+from modules.llm_client import ChatMessage, OllamaClient
 from modules.patient_parser import PatientContext
 from modules.vector_store import VectorSearchResult
-
-# Rationale: both OllamaClient and HuggingFaceClient have the same chat() interface.
-LLMClient = Union[OllamaClient, HuggingFaceClient]
 
 
 def _build_stage2_bundle(evidence_map: Dict[str, List[VectorSearchResult]] ) -> Dict[str, List[Dict[str, Any]]]:
@@ -32,7 +29,7 @@ def generate_stage3_narrative(
     patient_context: PatientContext,
     stage1_summary: Dict[str, Any],
     evidence_map: Dict[str, List[VectorSearchResult]],
-    llm_client: Optional[LLMClient],
+    llm_client: Optional[OllamaClient],
 ) -> Optional[Dict[str, Any]]:
     """Generate a narrative JSON (Subjective/Objective/Assessment/Plan) without altering existing alerts.
 

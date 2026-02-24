@@ -11,16 +11,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from typing import Any, Dict, Union
+from typing import Any, Dict
 from typing import List, Optional
 
 from modules.alert_rules import Alert
-from modules.llm_client import ChatMessage, OllamaClient, HuggingFaceClient
+from modules.llm_client import ChatMessage, OllamaClient
 from modules.patient_parser import PatientContext
 from modules.vector_store import VectorSearchResult
-
-# Rationale: both OllamaClient and HuggingFaceClient have the same chat() interface.
-LLMClient = Union[OllamaClient, HuggingFaceClient]
 
 
 @dataclass(frozen=True)
@@ -34,7 +31,7 @@ def generate_audit_checklist_alerts(
     *,
     patient_context: PatientContext,
     retrieved_chunks: List[VectorSearchResult],
-    llm_client: Optional[LLMClient] = None,
+    llm_client: Optional[OllamaClient] = None,
 ) -> List[Alert]:
     """Generate visit audit checklist items as Alert objects.
 
@@ -109,7 +106,7 @@ def generate_explanation(
     patient_context: PatientContext,
     alert: Alert,
     retrieved_chunks: List[VectorSearchResult],
-    llm_client: Optional[LLMClient] = None,
+    llm_client: Optional[OllamaClient] = None,
 ) -> ExplanationResult:
     """Generate an explanation for an alert."""
 
@@ -157,7 +154,7 @@ def generate_stage3_synthesis_issues(
     patient_context: PatientContext,
     deterministic_alerts: List[Alert],
     evidence_map: Dict[str, List[VectorSearchResult]],
-    llm_client: Optional[LLMClient],
+    llm_client: Optional[OllamaClient],
 ) -> List[Alert]:
     """Single-call synthesis that produces structured issues and maps them to Alerts.
 
@@ -274,7 +271,7 @@ def generate_stage3_synthesis_issues(
 
 def _try_llm_explanation(
     *,
-    llm_client: LLMClient,
+    llm_client: OllamaClient,
     patient_context: PatientContext,
     alert: Alert,
     retrieved_chunks: List[VectorSearchResult],
@@ -325,7 +322,7 @@ def _try_llm_explanation(
 
 def _try_llm_audit_checklist(
     *,
-    llm_client: LLMClient,
+    llm_client: OllamaClient,
     patient_context: PatientContext,
     retrieved_chunks: List[VectorSearchResult],
 ) -> Optional[str]:

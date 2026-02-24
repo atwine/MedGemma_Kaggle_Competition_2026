@@ -16,15 +16,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 from modules.embedder import Embedder
-from modules.llm_client import OllamaClient, HuggingFaceClient
+from modules.llm_client import OllamaClient
 from modules.patient_parser import build_patient_context, compute_lab_trends
 from modules.vector_store import VectorStore, VectorSearchResult
-
-# Rationale: both OllamaClient and HuggingFaceClient have the same chat() interface.
-LLMClient = Union[OllamaClient, HuggingFaceClient]
 
 
 # Core data structures -----------------------------------------------------
@@ -275,7 +272,7 @@ def _reason(
     context: QueryContext,
     subtasks: List[SubTaskPlan],
     evidence_bundles: List[EvidenceBundle],
-    llm_client: Optional[LLMClient] = None,
+    llm_client: Optional[OllamaClient] = None,
 ) -> str:
     """Reason over retrieved evidence.
 
@@ -481,7 +478,7 @@ def _reason_updated_management_plan(
     context: QueryContext,
     evidence_bundles: List[EvidenceBundle],
     *,
-    llm_client: Optional[LLMClient] = None,
+    llm_client: Optional[OllamaClient] = None,
 ) -> Optional[str]:
     # Rationale: Part 3 requires adding a new structured "UPDATED MANAGEMENT PLAN"
     # output alongside the existing toxicity checklist output.
@@ -489,9 +486,7 @@ def _reason_updated_management_plan(
         return None
 
     # Rationale: limit output length to force conciseness while still allowing structured JSON.
-    # Increased from 400 to 1200 because HuggingFace lacks Ollama's format="json"
-    # constraint, so the model needs more room to produce valid JSON.
-    _PLAN_CHAT_OPTIONS = {"num_predict": 1200}
+    _PLAN_CHAT_OPTIONS = {"num_predict": 400}
 
     def _strip_code_fences(text: str) -> str:
         # Rationale: tolerate models that wrap JSON in ```json fences.
@@ -887,7 +882,7 @@ def run_agentic_flow(
     vector_store: VectorStore,
     top_k: int = 5,
     page_range: Optional[Tuple[int, int]] = None,
-    llm_client: Optional[LLMClient] = None,
+    llm_client: Optional[OllamaClient] = None,
 ) -> AgenticResult:
     """Run the Phase 1 agentic flow skeleton.
 

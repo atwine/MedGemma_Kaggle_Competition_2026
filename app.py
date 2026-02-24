@@ -36,7 +36,7 @@ ExplanationResult = explanation_generator.ExplanationResult
 generate_audit_checklist_alerts = explanation_generator.generate_audit_checklist_alerts
 generate_explanation = explanation_generator.generate_explanation
 generate_stage3_synthesis_issues = explanation_generator.generate_stage3_synthesis_issues
-from modules.llm_client import OllamaClient, OllamaConfig, HuggingFaceClient, HuggingFaceConfig
+from modules.llm_client import OllamaClient, OllamaConfig
 from modules.patient_parser import build_patient_context, load_mock_patients
 from modules.rag_engine import RagEngine
 from modules.vector_store import VectorSearchResult, create_vector_store
@@ -77,18 +77,6 @@ def _load_patients(path: str, *, version: int = 1) -> List[Dict[str, Any]]:
     # Rationale: cache synthetic demo data across reruns for responsiveness.
     # The version parameter allows cache-busting when the JSON file changes.
     return load_mock_patients(Path(path))
-
-
-@st.cache_resource
-def _get_hf_client(model_id: str = "google/medgemma-1.5-4b-it") -> HuggingFaceClient:
-    """Load the HuggingFace model once and cache it across Streamlit reruns.
-
-    Rationale: the model is ~8GB in GPU memory. Loading it on every Save
-    click would be extremely slow. st.cache_resource keeps it alive for the
-    lifetime of the Streamlit server process.
-    """
-    cfg = HuggingFaceConfig(model=model_id)
-    return HuggingFaceClient(cfg)
 
 
 def _resolve_ollama_host() -> str:
@@ -446,15 +434,8 @@ def _run_analysis(
 
     llm_client = None
     if use_ollama:
-        # Rationale: use HuggingFace Transformers for FP16 inference on GPU.
-        # The model is cached via st.cache_resource so it loads only once.
-        # Falls back to OllamaClient if HF_BACKEND=0 is set explicitly.
-        use_hf = (os.getenv("HF_BACKEND", "1").strip() != "0")
-        if use_hf:
-            llm_client = _get_hf_client(ollama_model or "google/medgemma-1.5-4b-it")
-        else:
-            cfg = OllamaConfig(model=(ollama_model or "aadide/medgemma-1.5-4b-it-Q4_K_S"), num_ctx=ollama_num_ctx)
-            llm_client = OllamaClient(cfg)
+        cfg = OllamaConfig(model=(ollama_model or "aadide/medgemma-1.5-4b-it-Q4_K_S"), num_ctx=ollama_num_ctx)
+        llm_client = OllamaClient(cfg)
 
     # Optional: agentic planner + per-subtask retrieval (debug-only, no UI change).
     env_flag = (os.getenv("AGENTIC_RAG_DEBUG") or "").strip() == "1"
@@ -502,7 +483,7 @@ def _run_analysis(
     st.session_state["agentic_debug_result"] = agentic_debug_result
 
     # Status box for any LLM activity in this run.
-    ollama_status = st.status("LLM: idle", expanded=False) if use_ollama else None
+    ollama_status = st.status("Ollama: idle", expanded=False) if use_ollama else None
 
     ollama_error: Optional[str] = None
 
@@ -539,8 +520,8 @@ def _run_analysis(
         ]
 
     if ollama_status is not None:
-        # Rationale: the first LLM call is a good proxy for "LLM connected".
-        ollama_status.update(label="LLM: generating audit checklist\u2026", state="running")
+        # Rationale: the first LLM call is a good proxy for "Ollama connected".
+        ollama_status.update(label="Ollama: generating audit checklist…", state="running")
     # Manage LLM calls by mode: checklist vs per‑alert explanations vs synthesis vs screening.
     # In Synthesis mode, skip the checklist LLM to keep a single LLM call later.
     checklist_llm = llm_client if (use_ollama and llm_mode == "Checklist only") else None
@@ -549,7 +530,7 @@ def _run_analysis(
     checklist_alerts: List[Alert] = []
     if llm_mode == "Checklist only":
         if ollama_status is not None and checklist_llm is not None:
-            ollama_status.update(label="LLM: generating audit checklist\u2026", state="running")
+            ollama_status.update(label="Ollama: generating audit checklist…", state="running")
         checklist_alerts = generate_audit_checklist_alerts(
             patient_context=context,
             retrieved_chunks=checklist_retrieved,
@@ -559,9 +540,9 @@ def _run_analysis(
         if ollama_status is not None and checklist_llm is not None:
             last_err = checklist_llm.last_error if checklist_llm is not None else None
             if last_err:
-                ollama_status.update(label=f"LLM error: {last_err}", state="error")
+                ollama_status.update(label=f"Ollama error: {last_err}", state="error")
             else:
-                ollama_status.update(label="LLM connected (response received)", state="complete")
+                ollama_status.update(label="Ollama connected (response received)", state="complete")
         if checklist_alerts:
             alerts = list(alerts) + checklist_alerts
 
@@ -574,7 +555,7 @@ def _run_analysis(
         and llm_client is not None
     ):
         if ollama_status is not None:
-            ollama_status.update(label="LLM: screening for safety issues\u2026", state="running")
+            ollama_status.update(label="Ollama: screening for safety issues…", state="running")
         screening_debug: Dict[str, Any] = {}
         screening_alerts = generate_llm_screening_alerts(
             patient_context=context,
@@ -603,9 +584,9 @@ def _run_analysis(
 
         if ollama_status is not None:
             if last_err:
-                ollama_status.update(label=f"LLM error: {last_err}", state="error")
+                ollama_status.update(label=f"Ollama error: {last_err}", state="error")
             else:
-                ollama_status.update(label="LLM connected (response received)", state="complete")
+                ollama_status.update(label="Ollama connected (response received)", state="complete")
         if ollama_error is None:
             ollama_error = last_err
 
@@ -660,7 +641,7 @@ def _run_analysis(
             if ollama_status is not None and explanation_llm is not None:
                 # Rationale: per-alert LLM calls may each take time; show which step is active.
                 ollama_status.update(
-                    label=f"LLM: generating explanation for '{alert.title}'\u2026",
+                    label=f"Ollama: generating explanation for '{alert.title}'…",
                     state="running",
                 )
             # Rationale: measure per‑alert LLM explanation time to track latency and surface it in the UI.
@@ -677,9 +658,9 @@ def _run_analysis(
             if ollama_status is not None and explanation_llm is not None:
                 last_err = explanation_llm.last_error if explanation_llm is not None else None
                 if last_err:
-                    ollama_status.update(label=f"LLM error: {last_err}", state="error")
+                    ollama_status.update(label=f"Ollama error: {last_err}", state="error")
                 else:
-                    ollama_status.update(label="LLM connected (response received)", state="complete")
+                    ollama_status.update(label="Ollama connected (response received)", state="complete")
 
         # Rationale: capture the first LLM failure reason so the UI can show why
         # it fell back to deterministic mode.
@@ -702,7 +683,7 @@ def _run_analysis(
     # Stage 3 synthesis: single LLM call producing structured issues as new Alerts.
     if use_ollama and llm_mode == "Synthesis" and llm_client is not None:
         if ollama_status is not None:
-            ollama_status.update(label="LLM: generating synthesis issues\u2026", state="running")
+            ollama_status.update(label="Ollama: generating synthesis issues…", state="running")
         try:
             synth_alerts = generate_stage3_synthesis_issues(
                 patient_context=context,
@@ -730,9 +711,9 @@ def _run_analysis(
         if ollama_status is not None:
             last_err = llm_client.last_error
             if last_err:
-                ollama_status.update(label=f"LLM error: {last_err}", state="error")
+                ollama_status.update(label=f"Ollama error: {last_err}", state="error")
             else:
-                ollama_status.update(label="LLM connected (response received)", state="complete")
+                ollama_status.update(label="Ollama connected (response received)", state="complete")
         # Capture first error if no LLM text returned.
         if ollama_error is None:
             ollama_error = llm_client.last_error
@@ -1363,9 +1344,7 @@ def main() -> None:
         st.session_state["agentic_ui_debug_enabled"] = bool(agentic_ui_debug_enabled)
 
     with st.expander("LLM settings", expanded=False):
-        # Rationale: 'use_ollama' variable name kept for downstream compatibility,
-        # but it now controls the HuggingFace backend by default.
-        use_ollama = st.checkbox("Use LLM for screening (MedGemma on GPU)", value=True)
+        use_ollama = st.checkbox("Use Ollama for explanations (if available)", value=True)
         llm_mode = st.selectbox(
             "LLM mode",
             [
@@ -1373,23 +1352,38 @@ def main() -> None:
             ],
             index=0,
         )
-        # Rationale: HuggingFace model selector. Allow override via HF_MODEL env var.
-        env_model = (os.getenv("HF_MODEL") or "").strip()
+        env_model = (os.getenv("OLLAMA_MODEL") or "").strip()
 
-        base_options: List[str] = ["google/medgemma-1.5-4b-it"]
+        discovered_models = _list_ollama_models()
+        base_options: List[str] = []
+        if discovered_models:
+            base_options = list(dict.fromkeys(discovered_models))  # preserve order, de-dup
+        else:
+            base_options = ["aadide/medgemma-1.5-4b-it-Q4_K_S"]
+
+        # Ensure the default demo model is always present as a fallback.
+        if "aadide/medgemma-1.5-4b-it-Q4_K_S" not in base_options:
+            base_options.append("aadide/medgemma-1.5-4b-it-Q4_K_S")
+
         model_options = base_options + ["Custom..."]
         default_index = 0
+        if env_model and env_model in base_options:
+            default_index = base_options.index(env_model)
 
-        model_choice = st.selectbox("Model", model_options, index=default_index)
+        model_choice = st.selectbox("Ollama model", model_options, index=default_index)
         if model_choice == "Custom...":
-            ollama_model_ui = st.text_input("Custom HuggingFace model ID", value=(env_model or ""))
+            ollama_model_ui = st.text_input("Custom model tag", value=(env_model or ""))
         else:
             ollama_model_ui = model_choice
         if env_model:
-            st.caption(f"HF_MODEL is set: {env_model} (UI selection will be ignored)")
-        # Rationale: num_ctx is an Ollama concept; HuggingFace uses the model's
-        # native context window. Keep a dummy value for downstream compatibility.
-        num_ctx = 8192
+            st.caption(f"OLLAMA_MODEL is set: {env_model} (UI model selection will be ignored)")
+        num_ctx = st.number_input(
+            "Context window (num_ctx)",
+            min_value=1024,
+            max_value=131072,
+            value=8192,
+            step=1024,
+        )
         st.session_state["llm_num_ctx"] = int(num_ctx)
 
     save_disabled = not bool(GUIDELINE_PDF_PATHS)
