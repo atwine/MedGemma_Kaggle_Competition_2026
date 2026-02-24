@@ -22,30 +22,85 @@ def _build_screening_bundle(chunks: List[VectorSearchResult]) -> List[Dict[str, 
     return bundle
 
 
+def _strip_code_fences(text: str) -> str:
+    # Rationale: tolerate models that wrap JSON in ```json fences.
+    t = (text or "").strip()
+    if not t.startswith("```"):
+        return t
+    lines = t.splitlines()
+    if not lines:
+        return t
+    if lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _extract_first_json_array(text: str) -> str:
+    # Rationale: models sometimes add extra words before/after the JSON array.
+    # Extract the first full [...] block. If truncated, attempt to close incomplete objects.
+    raw = _strip_code_fences(text)
+    if not raw:
+        return ""
+    start = raw.find("[")
+    if start == -1:
+        return ""
+    depth = 0
+    in_str = False
+    esc = False
+    end = None
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+    
+    if end is not None:
+        return raw[start:end]
+    
+    # Rationale: if array is incomplete (truncated output), attempt to close it gracefully.
+    # This allows partial results to be parsed rather than failing completely.
+    incomplete = raw[start:]
+    # Close any open string
+    if in_str:
+        incomplete += '"'
+    # Close any open objects by counting braces
+    brace_depth = incomplete.count('{') - incomplete.count('}')
+    for _ in range(brace_depth):
+        incomplete += '}'
+    # Close the array
+    incomplete += ']'
+    return incomplete
+
+
 def _parse_issues_json(text: str) -> Optional[List[Dict[str, Any]]]:
     if not text:
         return None
 
+    # Rationale: extract first JSON array from surrounding text (proven fix from agentic_flow.py).
+    raw = _extract_first_json_array(text)
+    if not raw:
+        return None
+
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(raw)
     except Exception:
-        s = text.strip()
-        if s.startswith("```"):
-            s = s.split("```", 1)[1]
-            if "\n" in s:
-                s = s.split("\n", 1)[1]
-            if "```" in s:
-                s = s.rsplit("```", 1)[0]
-        start = s.find("[")
-        end = s.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            snippet = s[start : end + 1]
-            try:
-                parsed = json.loads(snippet)
-            except Exception:
-                return None
-        else:
-            return None
+        return None
 
     if not isinstance(parsed, list):
         return None
@@ -271,13 +326,13 @@ Return ONLY a valid JSON array. Each element follows this schema:
         ),
     }
 
-    # Rationale: increase num_predict so the model is less likely to truncate a long JSON array.
-    # Keep a safe fallback for clients/tests that don't accept the structured-output kwargs.
+    # Rationale: ARTEMIS prompt generates verbose alerts with differential diagnosis.
+    # Increased to 2500 tokens to handle 6+ alerts without truncation (each alert ~350-400 tokens).
     try:
         llm_text = llm_client.chat(
             [system, user],
             format=output_schema,
-            options_override={"num_predict": 256},
+            options_override={"num_predict": 2500},
         )
     except TypeError:
         llm_text = llm_client.chat([system, user])
