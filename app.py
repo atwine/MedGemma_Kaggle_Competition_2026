@@ -1252,9 +1252,7 @@ def main() -> None:
                         source = entry.get("source", "")
                         if source == "previous":
                             narrative = entry.get("narrative_text", "")
-                            entry_date = entry.get("date", "")
                             if narrative:
-                                st.markdown(f"**{entry_date}:**")
                                 st.markdown(narrative)
                                 st.markdown("")
                                 previous_labs_found = True

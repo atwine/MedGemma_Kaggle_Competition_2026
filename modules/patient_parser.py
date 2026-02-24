@@ -41,6 +41,10 @@ class PatientContext:
     other_medications: List[str] = field(default_factory=list)
     complaints_symptoms: str = ""
     examination_findings: str = ""
+    # NEW: Additional patient demographics and lab narrative
+    age_years: Optional[int] = None
+    sex: str = ""
+    labs_narrative: str = ""
 
 
 def load_mock_patients(path: Path) -> List[Dict[str, Any]]:
@@ -96,6 +100,21 @@ def build_patient_context(patient: Dict[str, Any]) -> PatientContext:
     intake = patient.get("intake") or {}
     complaints = intake.get("complaints_symptoms", "")
     exam_findings = intake.get("examination_findings", "")
+    
+    # Extract age and sex
+    age_years = patient.get("age_years")
+    sex = patient.get("sex", "")
+    
+    # Extract lab narrative text
+    labs_narrative_parts: List[str] = []
+    labs_raw = patient.get("labs") or {}
+    if "labs_narrative" in labs_raw:
+        for entry in labs_raw.get("labs_narrative", []):
+            if isinstance(entry, dict):
+                narrative = entry.get("narrative_text", "")
+                if narrative:
+                    labs_narrative_parts.append(narrative)
+    labs_narrative = "\n\n".join(labs_narrative_parts)
 
     return PatientContext(
         patient_id=str(patient.get("patient_id")),
@@ -106,6 +125,9 @@ def build_patient_context(patient: Dict[str, Any]) -> PatientContext:
         other_medications=other_meds,
         complaints_symptoms=complaints,
         examination_findings=exam_findings,
+        age_years=age_years,
+        sex=sex,
+        labs_narrative=labs_narrative,
     )
 
 

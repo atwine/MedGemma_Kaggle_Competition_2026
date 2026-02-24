@@ -248,9 +248,15 @@ def generate_llm_screening_alerts(
         "role": "user",
         "content": (
             f"Patient ID: {patient_context.patient_id}\n"
+            f"Age: {patient_context.age_years if patient_context.age_years is not None else 'Not recorded'} years\n"
+            f"Sex: {patient_context.sex if patient_context.sex else 'Not recorded'}\n"
             f"Encounter date: {patient_context.encounter_date.isoformat()}\n\n"
+            f"Current ART regimen: {', '.join(patient_context.art_regimen_current) if patient_context.art_regimen_current else 'None'}\n"
+            f"Other medications: {', '.join(patient_context.other_medications) if patient_context.other_medications else 'None'}\n\n"
             "Raw clinical history (concatenated notes_text):\n"
             f"{patient_context.notes_text}\n\n"
+            "Laboratory results:\n"
+            f"{patient_context.labs_narrative if patient_context.labs_narrative else 'None recorded'}\n\n"
             "Stage 1 summary JSON:\n"
             f"{json.dumps(stage1_summary, ensure_ascii=False)}\n\n"
             "Guideline evidence excerpts (screening bundle):\n"
