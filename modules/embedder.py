@@ -16,7 +16,9 @@ except Exception:  # pragma: no cover - import-time failures on offline envs
 @dataclass
 class EmbedderConfig:
     model_name: str = "all-MiniLM-L6-v2"
-    device: Optional[str] = None
+    # Rationale: default to CPU so the embedding model (~80MB) does not
+    # compete with MedGemma (~8GB) for GPU memory on the Tesla T4.
+    device: Optional[str] = "cpu"
 
 
 class Embedder:
